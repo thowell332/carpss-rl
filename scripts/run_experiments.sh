@@ -35,7 +35,7 @@ experiments=(
     " efficient  fixed        0.10  filter    "
     " efficient  fixed        1.00  filter    "
 
-    # GREEDY
+    # PROJECTION
     # <profile>  <method>  <value>  <filter>
     " cautious   projection    nan  filter    "
     " efficient  projection    nan  filter    "
@@ -49,22 +49,22 @@ experiments=(
 
     # ABLATIONS
     # <profile>  <method>  <value>  <filter>
-    " cautious   naive         nan  no-filter "
-    " efficient  naive         nan  no-filter "
-    " cautious   adaptive     0.01  no-filter "
+    #" cautious   naive         nan  no-filter "
+    #" efficient  naive         nan  no-filter "
+    #" cautious   adaptive     0.01  no-filter "
     " cautious   adaptive     0.10  no-filter "
-    " cautious   adaptive     1.00  no-filter "
-    " efficient  adaptive     0.01  no-filter "
-    " efficient  adaptive     0.10  no-filter "
-    " efficient  adaptive     1.00  no-filter "
-    " cautious   fixed        0.01  no-filter "
+    #" cautious   adaptive     1.00  no-filter "
+    #" efficient  adaptive     0.01  no-filter "
+    #" efficient  adaptive     0.10  no-filter "
+    #" efficient  adaptive     1.00  no-filter "
+    #" cautious   fixed        0.01  no-filter "
     " cautious   fixed        0.10  no-filter "
-    " cautious   fixed        1.00  no-filter "
-    " efficient  fixed        0.01  no-filter "
-    " efficient  fixed        0.10  no-filter "
-    " efficient  fixed        1.00  no-filter "
+    #" cautious   fixed        1.00  no-filter "
+    #" efficient  fixed        0.01  no-filter "
+    #" efficient  fixed        0.10  no-filter "
+    #" efficient  fixed        1.00  no-filter "
     " cautious   projection    nan  no-filter "
-    " efficient  projection    nan  no-filter "
+    #" efficient  projection    nan  no-filter "
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,11 +99,11 @@ for args in "${experiments[@]}"; do
     fi
 
     # Create subdirectory with profile prefix
-    mkdir -p "$PROJECT_ROOT/results/${profile}/${sub_dir}"
+    mkdir -p "$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}"
 
     # Build output filename
     if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
-        out_path="$PROJECT_ROOT/results/${profile}/${sub_dir}/4L20V_4L20V_${value}.csv"
+        out_path="$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}/4L20V_4L20V_${value}.csv"
         if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
             echo "Overwriting existing results: $out_path"
         elif [ -f "$out_path" ]; then
@@ -120,7 +120,7 @@ for args in "${experiments[@]}"; do
             --episodes "$NUM_EPISODES" \
             --output "$out_path"
     else
-        out_path="$PROJECT_ROOT/results/${profile}/${sub_dir}/4L20V_4L20V.csv"
+        out_path="$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}/4L20V_4L20V.csv"
         if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
             echo "Overwriting existing results: $out_path"
         elif [ -f "$out_path" ]; then

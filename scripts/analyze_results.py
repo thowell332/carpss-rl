@@ -13,6 +13,7 @@ import argparse
 import matplotlib
 matplotlib.use('pgf')  # Use pgf backend to render text in LaTeX
 import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -296,7 +297,7 @@ def generate_markdown_tables(grouped_data):
     # Define metric categories and their display names
     summary_metric_categories = {
         'Episode Metrics': ['mean_episode_length', 'collision_rate'],
-        'Safety Metrics': ['mean_speed'],
+        'Safety Metrics': ['mean_speed', 'tet_1s', 'tet_2s', 'tet_3s', 'teud_1v', 'teud_2v', 'teud_3v'],
         'Cost Metrics': ['cost_rate', 'avoided_cost_rate'],
         'Lane Usage': []
     }
@@ -317,8 +318,10 @@ def generate_markdown_tables(grouped_data):
         'mean_episode_length'    : 'Episode Length (s)',
         'collision_rate'         : 'Collision Rate (hr⁻¹)',
         'mean_speed'             : 'Speed (m/s)',
+        'tet_1s'                 : 'TET 1s (%)',
         'tet_2s'                 : 'TET 2s (%)',
         'tet_3s'                 : 'TET 3s (%)',
+        'teud_1v'                : 'TEUD 1v (%)',
         'teud_2v'                : 'TEUD 2v (%)',
         'teud_3v'                : 'TEUD 3v (%)',
         'cost_rate'              : 'Cost Rate (hr⁻¹)',
@@ -350,6 +353,9 @@ def generate_markdown_tables(grouped_data):
         all_lane_cols.update(lane_cols)
     # Instead of per-lane, use left/right
     summary_metric_categories['Lane Usage'] = ['left_lane_preference', 'right_lane_preference']
+    # Add TEUD 1v to Safety Metrics
+    if 'teud_1v' not in summary_metric_categories['Safety Metrics']:
+        summary_metric_categories['Safety Metrics'].append('teud_1v')
 
     # Build header rows
     summary_header_cols = ['Method']
@@ -411,7 +417,7 @@ def generate_markdown_tables(grouped_data):
                     for metric in metrics:
                         if metric == 'collision_rate':
                             summary_row.append(format_collision_rate(group_data))
-                        elif metric in ['tet_2s', 'tet_3s', 'teud_2v', 'teud_3v']:
+                        elif metric in ['tet_1s', 'tet_2s', 'tet_3s', 'teud_1v', 'teud_2v', 'teud_3v']:
                             if metric in stats:
                                 mean_val, std_val = stats[metric]
                                 mean_val *= 100
@@ -663,6 +669,376 @@ def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values):
         print(f"Adaptive trends plot saved to: {plot_file}")
 
 
+def generate_clustered_bar_plot(
+    grouped_data,
+    output_dir,
+    selected_value=1.00,
+    prefix="unsafe_ttc_",
+    suffix="_rate",
+    exclude_prefixes=None,
+    desired_order=None,
+    display_map=None,
+    y_label="Rate",
+    plot_title=None,
+):
+    """Generate clustered bar charts for unsafe-event action selection rates.
+
+    Parameters
+    ----------
+    grouped_data : dict
+        Mapping of configuration tuples to lists of pandas DataFrames (same as elsewhere).
+    output_dir : str
+        Directory where `plots/` subfolder will be created (if not present).
+    selected_value : float, optional
+        δ value to pick for the adaptive β experiments (default 1.0).
+    prefix : str, optional
+        Column-name prefix (e.g., ``"unsafe_"`` or ``"unsafe_ttc_"``).
+    suffix : str, optional
+        Column-name suffix (e.g., ``"_rate"`` or ``"_preference"``).
+    exclude_prefixes : list of str, optional
+        List of prefixes to exclude from action columns (e.g., ``["unsafe_ttc_"]`` for distance plots).
+    desired_order : list of str, optional
+        Explicit category ordering. If provided, categories appear in this order (followed by any remaining categories sorted).
+    display_map : dict, optional
+        Mapping from raw category key to label for x-tick. If omitted, auto-generated labels are used.
+    y_label : str, optional
+        Label for the y-axis.
+    plot_title : str, optional
+        If provided, override the automatic title.
+
+    This plot compares three experiment configurations for every model–environment
+    combination:
+        1. Unsupervised baseline.
+        2. Cautious profile – Adaptive (δ = *selected_value*) – *filtered*.
+        3. Efficient profile – Adaptive (δ = *selected_value*) – *filtered*.
+    """
+
+    from collections import defaultdict
+
+    # --------------------------- Plot style constants --------------------------- #
+    FIGSIZE = (3.25, 2.6)
+    BAR_WIDTH = 0.25
+    CAPS_SIZE = 3
+    LABEL_FONTSIZE = 9
+    TICK_FONTSIZE = 8
+    LEGEND_FONTSIZE = 7
+    TITLE_FONTSIZE = 10
+
+    plots_dir = os.path.join(output_dir, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    # Organise data we care about
+    groups_by_model_env = defaultdict(lambda: {
+        "unsupervised": [],
+        "cautious_adaptive": [],
+        "efficient_adaptive": [],
+    })
+
+    for config_tuple, group_data in grouped_data.items():
+        cfg = dict(config_tuple)
+        key = (cfg["model"], cfg["env"])
+
+        # Unsupervised baseline (profile agnostic)
+        if cfg.get("method") == "unsupervised":
+            groups_by_model_env[key]["unsupervised"].extend(group_data)
+
+        # Adaptive β (δ = selected_value), filtered
+        elif (
+            cfg.get("method") == "adaptive"
+            and cfg.get("filtered", False)
+            and abs(float(cfg.get("value", 0)) - float(selected_value)) < 1e-6
+        ):
+            if cfg.get("profile") == "cautious":
+                groups_by_model_env[key]["cautious_adaptive"].extend(group_data)
+            elif cfg.get("profile") == "efficient":
+                groups_by_model_env[key]["efficient_adaptive"].extend(group_data)
+
+    # Helper to compute mean & SE for a single column across a list of dfs
+    def _mean_se(dfs, col):
+        import numpy as np
+        import pandas as pd
+
+        if not dfs:
+            return np.nan, 0.0
+        vals = []
+        for df in dfs:
+            if col in df.columns:
+                vals.append(df[col])
+        if not vals:
+            return np.nan, 0.0
+        series = pd.concat(vals).dropna()
+        if series.empty:
+            return np.nan, 0.0
+        mean = series.mean() 
+        se = (series.std() / np.sqrt(len(series))) if len(series) > 1 else 0.0
+        return mean, se
+
+    # Iterate through model–env combos and draw plots
+    ACTION_PREFIX = prefix
+    EXCLUDE_PREFIXES = set(exclude_prefixes or [])
+    ACTION_SUFFIX = suffix
+
+    for (model, env), data_dict in sorted(groups_by_model_env.items()):
+        if not all(data_dict.values()):
+            # Skip combos where we do not have all three experimental groups
+            continue
+
+        # Derive list of actions from any dataframe we have
+        action_cols = set()
+        for dfs in data_dict.values():
+            for df in dfs:
+                for c in df.columns:
+                    if not c.endswith(ACTION_SUFFIX):
+                        continue
+                    if not c.startswith(ACTION_PREFIX):
+                        continue
+                    if any(c.startswith(ex) for ex in EXCLUDE_PREFIXES):
+                        continue
+                    action_cols.add(c)
+        # Avoid empty action list after filtering
+        if not action_cols:
+            continue
+
+        raw_categories = [
+            col[len(ACTION_PREFIX) : -len(ACTION_SUFFIX)] for col in action_cols
+        ]
+        if desired_order is not None:
+            categories = [c for c in desired_order if c in raw_categories] + [
+                c for c in sorted(raw_categories) if c not in desired_order
+            ]
+        else:
+            categories = sorted(raw_categories)
+
+        # Collect statistics
+        stats = {key: {"means": [], "ses": []} for key in data_dict.keys()}
+        for cat in categories:
+            col_name = f"{ACTION_PREFIX}{cat}{ACTION_SUFFIX}"
+            for key in stats.keys():
+                mean, se = _mean_se(data_dict[key], col_name)
+                stats[key]["means"].append(mean)
+                stats[key]["ses"].append(se)
+
+        # Plot
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        ind = np.arange(len(categories))
+        width = BAR_WIDTH
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+
+        ax.bar(
+            ind - width,
+            stats["unsupervised"]["means"],
+            width,
+            yerr=stats["unsupervised"]["ses"],
+            label="Unsupervised",
+            color='0.6',
+            capsize=CAPS_SIZE,
+        )
+        ax.bar(
+            ind,
+            stats["cautious_adaptive"]["means"],
+            width,
+            yerr=stats["cautious_adaptive"]["ses"],
+            label=r"Cautious",
+            color="teal",
+            capsize=CAPS_SIZE,
+        )
+        ax.bar(
+            ind + width,
+            stats["efficient_adaptive"]["means"],
+            width,
+            yerr=stats["efficient_adaptive"]["ses"],
+            label=r"Efficient",
+            color="purple",
+            capsize=CAPS_SIZE,
+        )
+
+        ax.set_xticks(ind)
+        if display_map is None:
+            default_map = {
+                "faster": "Faster",
+                "slow": "Slower",
+                "idle": "Idle",
+                "lane": "Lane Change",
+            }
+            effective_map = default_map
+        else:
+            effective_map = display_map
+        ax.set_xticklabels([
+            effective_map.get(c, c.replace("_", " ").title()) for c in categories
+        ], fontsize=TICK_FONTSIZE)
+        ax.set_ylabel(y_label, fontsize=LABEL_FONTSIZE)
+        ax.set_xlabel("Action", fontsize=LABEL_FONTSIZE)
+        ax.legend(fontsize=LEGEND_FONTSIZE)
+        # Title handling
+        if plot_title is None:
+            plot_title = "Clustered Bar Plot"
+        ax.set_title(plot_title, fontsize=TITLE_FONTSIZE)
+        ax.grid(True, axis="y", alpha=0.3)
+        plt.tight_layout()
+
+        plot_kind = "unsafe_ttc" if prefix == "unsafe_ttc_" else ("unsafe_distance" if prefix.startswith("unsafe_") else "lane_occ")
+        plot_file = os.path.join(plots_dir, f"{plot_kind}_bar_{model}_{env}.pdf")
+        plt.savefig(plot_file, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"Bar plot saved to: {plot_file}")
+
+
+# ---------------------------------------------------------------------
+# Lane-occupancy stacked bar chart
+# ---------------------------------------------------------------------
+
+
+def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_value=1.00):
+    """Generate stacked bar charts of lane occupancy distribution.
+
+    One bar per profile (Unsupervised, Cautious, Efficient) with segments
+    representing mean occupancy for each lane. Colors encode lane indices.
+    """
+
+    from collections import defaultdict
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    FIGSIZE = (3.25, 2.6)
+    TITLE_FONTSIZE = 10
+    LABEL_FONTSIZE = 9
+    TICK_FONTSIZE = 8
+    LEGEND_FONTSIZE = 7
+    LEGEND_TITLE_FONTSIZE = 7
+    BAR_HEIGHT = 0.8
+
+    plots_dir = os.path.join(output_dir, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    groups_by_model_env = defaultdict(lambda: {
+        "unsupervised": [],
+        "cautious_adaptive": [],
+        "efficient_adaptive": [],
+    })
+
+    for cfg_tuple, gdata in grouped_data.items():
+        cfg = dict(cfg_tuple)
+        key = (cfg["model"], cfg["env"])
+
+        if cfg.get("method") == "unsupervised":
+            groups_by_model_env[key]["unsupervised"].extend(gdata)
+        elif (
+            cfg.get("method") == "adaptive"
+            and cfg.get("filtered", False)
+            and abs(float(cfg.get("value", 0)) - float(selected_value)) < 1e-6
+        ):
+            if cfg.get("profile") == "cautious":
+                groups_by_model_env[key]["cautious_adaptive"].extend(gdata)
+            elif cfg.get("profile") == "efficient":
+                groups_by_model_env[key]["efficient_adaptive"].extend(gdata)
+
+    def _mean_per_lane(dfs):
+        lane_cols = set()
+        for df in dfs:
+            lane_cols.update([c for c in df.columns if c.startswith("lane_") and c.endswith("_preference")])
+        if not lane_cols:
+            return None, 0
+        idxs = sorted(int(c.split("_")[1]) for c in lane_cols)
+        means = []
+        for idx in idxs:
+            col = f"lane_{idx}_preference"
+            series_list = [df[col] for df in dfs if col in df.columns]
+            if not series_list:
+                means.append(np.nan)
+            else:
+                series = pd.concat(series_list).dropna()
+                means.append(series.mean())
+        return np.array(means), len(idxs)
+
+    for (model, env), data_dict in sorted(groups_by_model_env.items()):
+        if not all(data_dict.values()):
+            continue
+
+        unsup_means, n_lanes = _mean_per_lane(data_dict["unsupervised"])
+        if unsup_means is None:
+            continue
+        cautious_means, _ = _mean_per_lane(data_dict["cautious_adaptive"])
+        eff_means, _ = _mean_per_lane(data_dict["efficient_adaptive"])
+
+        # Aggregate into Left (lanes 0..mid-1) and Right (mid..end) probabilities
+        def _left_right(arr):
+            if arr is None or len(arr) == 0:
+                return np.array([np.nan, np.nan])
+            mid = len(arr) // 2
+            left = np.nansum(arr[:mid])
+            right = np.nansum(arr[mid:])
+            return np.array([left, right])
+
+        unsup_lr = _left_right(unsup_means)
+        cautious_lr = _left_right(cautious_means)
+        eff_lr = _left_right(eff_means)
+
+        data_matrix = np.vstack([unsup_lr, cautious_lr, eff_lr]).T  # shape (2, 3)
+        n_categories = 2  # Left, Right
+
+        # Shift bars down by 2 units to make room for legend at top
+        y = np.array([1.8, 3.2, 4.6])  # unsupervised, cautious, efficient
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+
+        lefts = np.zeros(3)
+        # Generate purple shades from light (lane 1) to dark (lane n)
+        colors = [(0.7, 0.7, 0.7), (0.3, 0.3, 0.3)]  # light grey for Left, dark grey for Right
+        legend_labels = ["Left Side of Road", "Right Side of Road"]
+
+        for cat_idx in range(n_categories):
+            vals = data_matrix[cat_idx]
+            color = colors[cat_idx]
+            legend_label = legend_labels[cat_idx]
+            ax.barh(
+                y,
+                vals,
+                left=lefts,
+                color=color,
+                height=BAR_HEIGHT,
+                label=legend_label,
+            )
+            lefts += vals
+
+        # Adjust y-limits to include space at top for legend (add extra headroom)
+        ax.set_ylim(y[-1] + 1.0, 0)  # inverted later
+
+        # Remove default y tick labels
+        ax.set_yticks([])
+
+        # Add centered profile labels above each bar
+        labels = ["Unsupervised", "Cautious", "Efficient"]
+        for idx, lbl in enumerate(labels):
+            y_pos = y[idx] - BAR_HEIGHT / 2 - 0.1
+            ax.text(
+                0.5,
+                y_pos,
+                lbl,
+                ha="center",
+                va="bottom",
+                fontsize=LABEL_FONTSIZE,
+            )
+
+        ax.set_xlabel("Proportion of Time Spent in Lane Group", fontsize=LABEL_FONTSIZE, labelpad=6)
+        ax.set_xlim(0, 1)
+        # Natural y-axis orientation keeps Unsup at top
+        n_cols = n_categories
+        ax.legend(fontsize=LEGEND_FONTSIZE, ncol=n_cols, loc="upper center")
+        
+        ax.set_title("Lane Occupancy Across Behavior Profiles", fontsize=TITLE_FONTSIZE)
+
+        plt.tight_layout()
+
+        # No vertical lines needed after left/right aggregation
+
+        plt.tight_layout()
+        plot_file = os.path.join(plots_dir, f"lane_occ_stacked_{model}_{env}.pdf")
+        plt.savefig(plot_file, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"Lane-occupancy stacked bar plot saved to: {plot_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Analyze experiment results from CSV files')
     parser.add_argument('--results-dir', default=None, 
@@ -735,6 +1111,34 @@ def main():
     if plot_adaptive_values:
         print("Generating adaptive trends plot...")
         generate_adaptive_trend_plot(grouped_data, args.output_dir, plot_adaptive_values)
+    
+    # Generate clustered-bar plots for unsafe TTC and unsafe distance
+    print("Generating unsafe TTC bar plot...")
+    generate_clustered_bar_plot(
+        grouped_data,
+        args.output_dir,
+        selected_value=0.10,
+        prefix="unsafe_ttc_",
+        y_label="Action Selection Rate",
+        plot_title="Action Selection Across Behavior Profiles\nDuring $\mathrm{TTC} < 3~\mathrm{s}$ Exposure",
+        desired_order=["faster", "idle", "slow", "lane"],
+    )
+
+    print("Generating unsafe distance bar plot...")
+    generate_clustered_bar_plot(
+        grouped_data,
+        args.output_dir,
+        selected_value=0.10,
+        prefix="unsafe_",
+        exclude_prefixes=["unsafe_ttc_"],
+        y_label="Action Selection Rate",
+        plot_title="Action Selection Across Behavior Profiles\nDuring $d < 3L$ Exposure",
+        desired_order=["faster", "idle", "slow", "lane"],
+    )
+
+    # Generate stacked bar plot for lane occupancy
+    print("Generating lane-occupancy stacked bar plot...")
+    generate_lane_occupancy_stacked_bar_plot(grouped_data, args.output_dir, selected_value=0.10)
     
     # Write summary.md
     summary_file = os.path.join(args.output_dir, 'summary.md')

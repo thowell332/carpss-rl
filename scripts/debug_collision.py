@@ -39,7 +39,7 @@ def debug_collision(profile, method, value, filter, episode_seed=0):
     # Override rendering properties for debugging
     env_config_dict.update({
         "render_agent": True,
-        "show_trajectories": True,
+        "show_trajectories": False,
         "offscreen_rendering": False
     })
     

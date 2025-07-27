@@ -12,7 +12,7 @@ import torch
 from stable_baselines3 import DQN
 from highway_env.envs.highway_env import HighwayEnv
 
-from norm_supervisor.consts import VEHICLE_LENGTH
+from norm_supervisor.consts import VEHICLE_LENGTH, ACTION_STRINGS
 from norm_supervisor.norms.norms import TailgatingNorm
 from norm_supervisor.supervisor import Supervisor, PolicyAugmentMethod
 import norm_supervisor.metrics as metrics
@@ -80,10 +80,40 @@ class EpisodeMetrics:
         
         self.cost         = 0.0 # Weighted norm violation cost
         self.avoided_cost = 0.0 # Avoided weighted norm violation cost
+
+        # --- New tracking for unsafe-state behaviour ---
+        self.unsafe_frames: int = 0
+        # Counts per action id while unsafe
+        self.unsafe_action_hist: dict[int, int] = defaultdict(int)
+
+        # Headway derivative while unsafe (per frame)
+        self._prev_distance: float | None = None
+        self.delta_gap_unsafe_sum: float = 0.0
+        self.delta_gap_unsafe_frames: int = 0
+
+        # Minimum gap reached in each unsafe episode
+        self.current_min_gap: float | None = None
+        self.min_gaps: list[float] = []
+
+        # Duration of each distance-unsafe episode (in frames)
+        self.current_unsafe_duration: int = 0
+        self.unsafe_durations: list[int] = []
+
+        # --- New tracking for TTC-unsafe behaviour ---
+        self.unsafe_ttc_frames: int = 0
+        self.unsafe_ttc_action_hist: dict[int, int] = defaultdict(int)
+        self._prev_ttc: float | None = None
+        self.delta_ttc_unsafe_sum: float = 0.0
+        self.delta_ttc_unsafe_frames: int = 0
+        self.current_min_ttc: float | None = None
+        self.min_ttcs: list[float] = []
+        # Duration of each TTC-unsafe episode (in frames)
+        self.current_unsafe_ttc_duration: int = 0
+        self.unsafe_ttc_durations: list[int] = []
     
     def add_timestep(self, ttc: float, following_distance: float, speed: float, lane_index: int,
                      norm_violations: dict[str, bool], constraint_violations: dict[str, bool],
-                     cost: float, avoided_cost: float):
+                     cost: float, avoided_cost: float, action: int):
         """Add data from a single timestep."""
         self.episode_length += 1
         self.ttc_history.append(ttc)
@@ -99,6 +129,83 @@ class EpisodeMetrics:
         
         self.cost += cost
         self.avoided_cost += avoided_cost
+
+        # ---------- Unsafe-state bookkeeping ----------
+        unsafe = following_distance < 3 * VEHICLE_LENGTH  # Distance criterion
+        if unsafe:
+            self.unsafe_frames += 1
+            self.unsafe_action_hist[action] += 1
+
+            # Count duration frames
+            self.current_unsafe_duration += 1
+
+            if self._prev_distance is not None:
+                self.delta_gap_unsafe_sum += (following_distance - self._prev_distance)
+                self.delta_gap_unsafe_frames += 1
+
+            # Track minimum gap within a contiguous unsafe episode
+            if self.current_min_gap is None:
+                self.current_min_gap = following_distance
+            else:
+                self.current_min_gap = min(self.current_min_gap, following_distance)
+        else:
+            # If exiting an unsafe episode, store the min gap encountered
+            if self.current_min_gap is not None:
+                self.min_gaps.append(self.current_min_gap)
+                self.current_min_gap = None
+
+            # Store duration if we were in an unsafe episode
+            if self.current_unsafe_duration > 0:
+                self.unsafe_durations.append(self.current_unsafe_duration)
+                self.current_unsafe_duration = 0
+
+        self._prev_distance = following_distance
+
+        # ---------- TTC-unsafe bookkeeping ----------
+        unsafe_ttc = (not np.isnan(ttc)) and ttc < 3.0
+        if unsafe_ttc:
+            self.unsafe_ttc_frames += 1
+            self.unsafe_ttc_action_hist[action] += 1
+
+            # duration counting
+            self.current_unsafe_ttc_duration += 1
+
+            if self._prev_ttc is not None:
+                self.delta_ttc_unsafe_sum += (ttc - self._prev_ttc)
+                self.delta_ttc_unsafe_frames += 1
+
+            if self.current_min_ttc is None:
+                self.current_min_ttc = ttc
+            else:
+                self.current_min_ttc = min(self.current_min_ttc, ttc)
+        else:
+            if self.current_min_ttc is not None:
+                self.min_ttcs.append(self.current_min_ttc)
+                self.current_min_ttc = None
+
+            if self.current_unsafe_ttc_duration > 0:
+                self.unsafe_ttc_durations.append(self.current_unsafe_ttc_duration)
+                self.current_unsafe_ttc_duration = 0
+
+        self._prev_ttc = ttc
+
+    def finalize(self):
+        """Finalize metrics at the end of an episode (capture trailing unsafe segment)."""
+        if self.current_min_gap is not None:
+            self.min_gaps.append(self.current_min_gap)
+            self.current_min_gap = None
+
+        if self.current_unsafe_duration > 0:
+            self.unsafe_durations.append(self.current_unsafe_duration)
+            self.current_unsafe_duration = 0
+
+        if self.current_min_ttc is not None:
+            self.min_ttcs.append(self.current_min_ttc)
+            self.current_min_ttc = None
+
+        if self.current_unsafe_ttc_duration > 0:
+            self.unsafe_ttc_durations.append(self.current_unsafe_ttc_duration)
+            self.current_unsafe_ttc_duration = 0
     
     def _safe_nanmean(self, data):
         """Calculate nanmean safely, avoiding empty slice warnings."""
@@ -132,6 +239,23 @@ class ExperimentResults:
         all_norm_violations = defaultdict(int)
         all_constraint_violations = defaultdict(int)
         total_cost, total_avoided_cost = 0.0, 0.0
+
+        # Aggregation containers for distance-unsafe metrics
+        total_unsafe_frames = 0
+        unsafe_action_counts = defaultdict(int)
+        total_delta_gap_sum = 0.0
+        total_delta_gap_frames = 0
+        all_min_gaps: list[float] = []
+        all_unsafe_durations: list[int] = []
+
+        # Aggregation containers for TTC-unsafe metrics
+        total_unsafe_ttc_frames = 0
+        unsafe_ttc_action_counts = defaultdict(int)
+        total_delta_ttc_sum = 0.0
+        total_delta_ttc_frames = 0
+        all_min_ttcs: list[float] = []
+        all_unsafe_ttc_durations: list[int] = []
+
         for ep in self.episode_metrics:
             episode_lengths.append(ep.episode_length)
             total_collisions += ep.collision
@@ -147,17 +271,44 @@ class ExperimentResults:
             total_cost += ep.cost
             total_avoided_cost += ep.avoided_cost
 
-        # Calculate mean TTC and following distance under thresholds
-        ttc_3s = metrics.calculate_mean_under(all_ttc_history, 3)
-        ttc_3_5s = metrics.calculate_mean_under(all_ttc_history, 3.5)
-        ttc_4s = metrics.calculate_mean_under(all_ttc_history, 4)
-        distance_3v = metrics.calculate_mean_under(all_distance_history, 3 * VEHICLE_LENGTH)
-        distance_3_5v = metrics.calculate_mean_under(all_distance_history, 3.5 * VEHICLE_LENGTH)
-        distance_4v = metrics.calculate_mean_under(all_distance_history, 4 * VEHICLE_LENGTH)
+            # Aggregate new unsafe metrics
+            total_unsafe_frames += ep.unsafe_frames
+            for a, c in ep.unsafe_action_hist.items():
+                unsafe_action_counts[a] += c
+            total_delta_gap_sum += ep.delta_gap_unsafe_sum
+            total_delta_gap_frames += ep.delta_gap_unsafe_frames
+            all_min_gaps.extend(ep.min_gaps)
+
+            all_unsafe_durations.extend(ep.unsafe_durations)
+
+            # TTC metrics aggregation
+            total_unsafe_ttc_frames += ep.unsafe_ttc_frames
+            for a, c in ep.unsafe_ttc_action_hist.items():
+                unsafe_ttc_action_counts[a] += c
+            total_delta_ttc_sum += ep.delta_ttc_unsafe_sum
+            total_delta_ttc_frames += ep.delta_ttc_unsafe_frames
+            all_min_ttcs.extend(ep.min_ttcs)
+            all_unsafe_ttc_durations.extend(ep.unsafe_ttc_durations)
+
+        # Calculate time exposed TTC and following distance
+        sample_frequency = self.config.model_env['policy_freq']
+        total_time = sum(episode_lengths)
+
+        # Mean recovery time in seconds
+        if all_unsafe_durations:
+            mean_recovery_time = np.mean(all_unsafe_durations) / self.config.model_env['policy_freq']
+        else:
+            mean_recovery_time = np.nan
+
+        ttc_1s = metrics.calculate_exposure(all_ttc_history, sample_frequency, 1) / total_time
+        ttc_2s = metrics.calculate_exposure(all_ttc_history, sample_frequency, 2) / total_time
+        ttc_3s = metrics.calculate_exposure(all_ttc_history, sample_frequency, 3) / total_time
+        distance_1v = metrics.calculate_exposure(all_distance_history, sample_frequency, 1 * VEHICLE_LENGTH) / total_time
+        distance_2v = metrics.calculate_exposure(all_distance_history, sample_frequency, 2 * VEHICLE_LENGTH) / total_time
+        distance_3v = metrics.calculate_exposure(all_distance_history, sample_frequency, 3 * VEHICLE_LENGTH) / total_time
 
         # Normalize lane preferences, violation rates, and cost rates
         lane_preferences, norm_violation_rates, constraint_violation_rates = {}, {}, {}
-        total_time = sum(episode_lengths)
         for lane, time in all_lane_times.items():
             lane_preferences[lane] = time / total_time
         for norm, count in all_norm_violations.items():
@@ -166,6 +317,65 @@ class ExperimentResults:
             constraint_violation_rates[constraint] = count / total_time
         cost_rate = total_cost / total_time
         avoided_cost_rate = total_avoided_cost / total_time
+
+        # ----- Compute new unsafe behaviour metrics -----
+        if total_unsafe_frames > 0:
+            unsafe_slow_rate = unsafe_action_counts.get(ACTION_STRINGS["SLOWER"], 0) / total_unsafe_frames
+
+            lane_left_id  = ACTION_STRINGS["LANE_LEFT"]
+            lane_right_id = ACTION_STRINGS["LANE_RIGHT"]
+            unsafe_lane_rate = (
+                unsafe_action_counts.get(lane_left_id, 0) +
+                unsafe_action_counts.get(lane_right_id, 0)
+            ) / total_unsafe_frames
+
+            unsafe_faster_rate = unsafe_action_counts.get(ACTION_STRINGS["FASTER"], 0) / total_unsafe_frames
+            unsafe_idle_rate   = unsafe_action_counts.get(ACTION_STRINGS["IDLE"], 0)   / total_unsafe_frames
+        else:
+            unsafe_slow_rate   = np.nan
+            unsafe_lane_rate   = np.nan
+            unsafe_faster_rate = np.nan
+            unsafe_idle_rate   = np.nan
+
+        mean_delta_gap_unsafe = (
+            total_delta_gap_sum / total_delta_gap_frames
+        ) if total_delta_gap_frames > 0 else np.nan
+
+        min_gap_p05 = (
+            np.percentile(all_min_gaps, 5) if all_min_gaps else np.nan
+        )
+
+        # ----- TTC unsafe behaviour metrics -----
+        if total_unsafe_ttc_frames > 0:
+            unsafe_ttc_slow_rate = unsafe_ttc_action_counts.get(ACTION_STRINGS["SLOWER"], 0) / total_unsafe_ttc_frames
+            lane_left_id  = ACTION_STRINGS["LANE_LEFT"]
+            lane_right_id = ACTION_STRINGS["LANE_RIGHT"]
+            unsafe_ttc_lane_rate = (
+                unsafe_ttc_action_counts.get(lane_left_id, 0) +
+                unsafe_ttc_action_counts.get(lane_right_id, 0)
+            ) / total_unsafe_ttc_frames
+
+            unsafe_ttc_faster_rate = unsafe_ttc_action_counts.get(ACTION_STRINGS["FASTER"], 0) / total_unsafe_ttc_frames
+            unsafe_ttc_idle_rate   = unsafe_ttc_action_counts.get(ACTION_STRINGS["IDLE"], 0)   / total_unsafe_ttc_frames
+        else:
+            unsafe_ttc_slow_rate   = np.nan
+            unsafe_ttc_lane_rate   = np.nan
+            unsafe_ttc_faster_rate = np.nan
+            unsafe_ttc_idle_rate   = np.nan
+
+        mean_delta_ttc_unsafe = (
+            total_delta_ttc_sum / total_delta_ttc_frames
+        ) if total_delta_ttc_frames > 0 else np.nan
+
+        min_ttc_p05 = (
+            np.percentile(all_min_ttcs, 5) if all_min_ttcs else np.nan
+        )
+
+        # Mean TTC recovery time
+        if all_unsafe_ttc_durations:
+            mean_ttc_recovery_time = np.mean(all_unsafe_ttc_durations) / self.config.model_env['policy_freq']
+        else:
+            mean_ttc_recovery_time = np.nan
 
         # Build base results
         results = {
@@ -177,12 +387,12 @@ class ExperimentResults:
             'num_episodes': len(self.episode_metrics),
             'mean_episode_length': np.mean(episode_lengths),
             'total_collisions': total_collisions,
-            'ttc_3s': ttc_3s,
-            'ttc_3_5s': ttc_3_5s,
-            'ttc_4s': ttc_4s,
-            'distance_3v': distance_3v,
-            'distance_3_5v': distance_3_5v,
-            'distance_4v': distance_4v,
+            'tet_1s': ttc_1s,
+            'tet_2s': ttc_2s,
+            'tet_3s': ttc_3s,
+            'teud_1v': distance_1v,
+            'teud_2v': distance_2v,
+            'teud_3v': distance_3v,
             'mean_speed': np.mean(all_speed_history),
             'speed_violation_rate': norm_violation_rates.get('SpeedNorm', np.nan),
             'tailgating_violation_rate': norm_violation_rates.get('TailgatingNorm', np.nan),
@@ -196,6 +406,20 @@ class ExperimentResults:
             'lane_change_safety_envelope_violation_rate': constraint_violation_rates.get('LaneChangeSafetyEnvelopeConstraint', np.nan),
             'cost_rate': cost_rate,
             'avoided_cost_rate': avoided_cost_rate,
+            'unsafe_slow_rate': unsafe_slow_rate,
+            'unsafe_lane_rate': unsafe_lane_rate,
+            'unsafe_faster_rate': unsafe_faster_rate,
+            'unsafe_idle_rate': unsafe_idle_rate,
+            'mean_delta_gap_unsafe': mean_delta_gap_unsafe,
+            'min_gap_p05': min_gap_p05,
+            'unsafe_ttc_slow_rate': unsafe_ttc_slow_rate,
+            'unsafe_ttc_lane_rate': unsafe_ttc_lane_rate,
+            'unsafe_ttc_faster_rate': unsafe_ttc_faster_rate,
+            'unsafe_ttc_idle_rate': unsafe_ttc_idle_rate,
+            'mean_delta_ttc_unsafe': mean_delta_ttc_unsafe,
+            'min_ttc_p05': min_ttc_p05,
+            'mean_recovery_time': mean_recovery_time,
+            'mean_ttc_recovery_time': mean_ttc_recovery_time,
         }
         
         # Add lane preferences based on actual lane count
@@ -218,8 +442,8 @@ class CSVWriter:
         """Get CSV field names based on lane count."""
         base_fields = [
             'experiment_id', 'policy_freq', 'profile', 'method', 'value', 'num_episodes',
-            'mean_episode_length', 'total_collisions', 'ttc_3s', 'ttc_3_5s', 'ttc_4s', 'distance_3v',
-            'distance_3_5v', 'distance_4v', 'mean_speed'
+            'mean_episode_length', 'total_collisions', 'tet_1s', 'tet_2s', 'tet_3s', 'teud_1v',
+            'teud_2v', 'teud_3v', 'mean_speed'
         ]
         
         # Add lane fields
@@ -231,7 +455,11 @@ class CSVWriter:
             'lane_keeping_violation_rate', 'lane_change_tailgating_violation_rate',
             'lane_change_braking_violation_rate', 'collision_violation_rate',
             'lane_change_collision_violation_rate', 'safety_envelope_violation_rate',
-            'lane_change_safety_envelope_violation_rate', 'cost_rate', 'avoided_cost_rate'
+            'lane_change_safety_envelope_violation_rate', 'cost_rate', 'avoided_cost_rate',
+            'unsafe_slow_rate', 'unsafe_lane_rate', 'unsafe_faster_rate', 'unsafe_idle_rate',
+            'mean_delta_gap_unsafe', 'min_gap_p05',
+            'unsafe_ttc_slow_rate', 'unsafe_ttc_lane_rate', 'unsafe_ttc_faster_rate', 'unsafe_ttc_idle_rate',
+            'mean_delta_ttc_unsafe', 'min_ttc_p05', 'mean_recovery_time', 'mean_ttc_recovery_time'
         ]
         
         return base_fields + lane_fields + violation_fields
@@ -380,7 +608,8 @@ class ExperimentRunner:
                     norm_violations=violations_dict,
                     constraint_violations=constraint_violations_dict,
                     cost=violations_weight,
-                    avoided_cost=avoided_violations_weight
+                    avoided_cost=avoided_violations_weight,
+                    action=action
                 )
                 
                 # Take action
@@ -393,6 +622,7 @@ class ExperimentRunner:
                         episode_metrics.collision = True
             
             # Finalize episode metrics
+            episode_metrics.finalize()
             results.add_episode(episode_metrics)
             
             # Print progress every 10 episodes

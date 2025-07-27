@@ -102,3 +102,21 @@ def calculate_mean_under(
     if not any(mask):
         return np.nan
     return sample_history[mask].mean()
+
+def calculate_cv_under(
+    sample_history: npt.ArrayLike,
+    threshold: float
+) -> float:
+    """
+    Calculate the coefficient of variance for the provided metric under the specified threshold
+
+    :param sample_history: a list of samples
+    :param threshold: the threshold for exposure
+    """
+    sample_history = np.asarray(sample_history, dtype=np.float64)
+    if sample_history.ndim != 1:
+        raise ValueError("Sample history must be a 1D array of numerics.")
+    mask = sample_history <= threshold
+    if not any(mask):
+        return np.nan
+    return sample_history[mask].std() / sample_history[mask].mean()
