@@ -1,4 +1,4 @@
-#Runtime Behavior Steering for Safe Reinforcement Learning
+# Runtime Behavior Steering for Safe Reinforcement Learning
 
 This project implements a normative supervisor which augments the actions of a pretrained DQN agent to enforce driving norms and safety constraints. The agent is trained and tested in the [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv/tree/master) simulation environment using the configurations under the `configs/` directory.
 
