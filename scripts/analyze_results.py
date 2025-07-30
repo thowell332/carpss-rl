@@ -13,15 +13,23 @@ import argparse
 import matplotlib
 matplotlib.use('pgf')  # Use pgf backend to render text in LaTeX
 import matplotlib.pyplot as plt
-from matplotlib import colors as mcolors
 
 plt.rcParams.update({
     "text.usetex": True,
     "pgf.texsystem": "pdflatex",
     "pgf.rcfonts": False,  # don't override LaTeX document fonts
     "font.family": "serif",  # use whatever LaTeX is using (Times here)
-    "text.latex.preamble": r"\usepackage{times}"
+    "text.latex.preamble": r"\usepackage{times}",
 })
+
+# CMYK-safe, WCAG 2.0-compliant, grayscale distinguishable color codes
+colors = {
+    "gray": "#949494",
+    "medium_gray": "#949494",
+    "dark_gray": "#474747",
+    "purple": "#542c5d", #88007d",
+    "teal": "#008381" #"#007f7c" #007f7f",
+}
 
 # Utility function to compute left/right lane preferences for any number of lanes
 def compute_left_right_lane_preferences(stats, n_lanes=None):
@@ -539,7 +547,7 @@ def write_table_section(f, title, header_cols, rows):
         f.write("| " + " | ".join(str(cell) for cell in row) + " |\n")
 
 
-def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values):
+def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, projection_point = 1):
     """Generate line plots showing how metrics evolve with adaptive method values."""
     # Create plots subdirectory
     plots_dir = os.path.join(output_dir, 'plots')
@@ -644,12 +652,13 @@ def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values):
 
         # Add vertical dashed line at projection point
         for ax in [ax1, ax2]:
-            ax.axvline(x=1, color='gray', linestyle='--', linewidth=1.2, alpha=0.6)
+            ax.axvline(x=projection_point, color='gray', linestyle='--', linewidth=1.2, alpha=0.6)
 
-        ax1.set_ylabel(r'Collision Rate $\left(\mathrm{hr}^{-1}\right)$', fontsize=LABEL_FONTSIZE)
-        ax2.set_ylabel(r'Cost Rate $\left(\mathrm{hr}^{-1}\right)$', fontsize=LABEL_FONTSIZE)
-        ax2.set_xlabel(r'KL Budget $\left(\delta\right)$', fontsize=LABEL_FONTSIZE)
-        fig.suptitle(r'Effect of KL Budget in Adaptive-$\beta$ SCPS', fontsize=SUPTITLE_FONTSIZE, y=0.96)
+        ax1.set_ylabel(r"Collision Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
+        ax2.set_ylabel(r"Cost Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
+        ax2.set_xlabel(r"KL Budget $\left(\delta\right)$", fontsize=LABEL_FONTSIZE)
+        fig.suptitle(r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
+        in Zero-Shot Environment""", fontsize=SUPTITLE_FONTSIZE, y=0.96)
         for ax in [ax1, ax2]:
             ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
 
@@ -657,7 +666,7 @@ def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values):
         fig.align_ylabels([ax1, ax2])
         for ax in [ax1, ax2]:
             xmin, xmax = ax.get_xlim()
-            ax.axvspan(1, xmax, color='gray', alpha=0.2, label='Cost-Optimal\nProjection')
+            ax.axvspan(projection_point, xmax, color='gray', alpha=0.2, label='Cost-Optimal\nProjection')
             ax.set_xlim(xmin, xmax)
 
         # Add a shared legend across the top, under the title
@@ -832,7 +841,7 @@ def generate_clustered_bar_plot(
             width,
             yerr=stats["unsupervised"]["ses"],
             label="Unsupervised",
-            color='0.6',
+            color=colors['gray'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -841,7 +850,7 @@ def generate_clustered_bar_plot(
             width,
             yerr=stats["cautious_adaptive"]["ses"],
             label=r"Cautious",
-            color="teal",
+            color=colors['teal'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -850,7 +859,7 @@ def generate_clustered_bar_plot(
             width,
             yerr=stats["efficient_adaptive"]["ses"],
             label=r"Efficient",
-            color="purple",
+            color=colors['purple'],
             capsize=CAPS_SIZE,
         )
 
@@ -984,12 +993,11 @@ def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_
 
         lefts = np.zeros(3)
         # Generate purple shades from light (lane 1) to dark (lane n)
-        colors = [(0.7, 0.7, 0.7), (0.3, 0.3, 0.3)]  # light grey for Left, dark grey for Right
         legend_labels = ["Left Side of Road", "Right Side of Road"]
 
         for cat_idx in range(n_categories):
             vals = data_matrix[cat_idx]
-            color = colors[cat_idx]
+            color = colors['medium_gray'] if cat_idx == 0 else colors['dark_gray']
             legend_label = legend_labels[cat_idx]
             ax.barh(
                 y,

@@ -19,10 +19,16 @@ import norm_supervisor.metrics as metrics
 
 # Configuration mappings
 CONFIGS = {
-    'default': {
+    '4L20V': {
         'model_file': '4_lanes_20_vehicles.zip',
         'env_config': '4_lanes_20_vehicles.json',
         'lanes': 4,
+        'policy_freq': 1
+    },
+    '6L50V': {
+        'model_file': '4_lanes_20_vehicles.zip',
+        'env_config': '6_lanes_50_vehicles.json',
+        'lanes': 5,
         'policy_freq': 1
     }
 }
@@ -36,13 +42,14 @@ class ExperimentConfig:
     
     def __init__(self, args: argparse.Namespace):
         self.profile = args.profile
+        self.env = args.env
         self.method = args.method
         self.value = args.value
         self.num_experiments = args.experiments
         self.num_episodes = args.episodes
         self.output_file = args.output
         self.filter = args.filter
-        self.model_env = CONFIGS['default'] # TODO: Support additional model-env configs
+        self.model_env = CONFIGS[self.env]
         
         # Validate configuration
         self._validate()
@@ -672,10 +679,12 @@ def parse_arguments():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
-    parser.add_argument('--profile', choices=['cautious', 'efficient'], required=True,
+    parser.add_argument('--profile', choices=[p for p in Supervisor.PROFILES], required=True,
                        help='Driving profile to use')
     parser.add_argument('--method', choices=['nop', 'naive', 'adaptive', 'fixed', 'projection'], 
                        required=True, help='Supervisor method')
+    parser.add_argument('--env', choices=[e for e in CONFIGS], default='4L20V',
+                       help='Environment/model configuration')
     parser.add_argument('--value', type=float, 
                        help='Value for adaptive/fixed methods (required for adaptive/fixed methods)')
     parser.add_argument('--experiments', type=int, default=5,

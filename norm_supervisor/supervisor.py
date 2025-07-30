@@ -15,9 +15,8 @@ from highway_env.envs.highway_env import HighwayEnv
 from stable_baselines3 import DQN
 
 from norm_supervisor.norms.profiles.abstract import AbstractNormProfile
-from norm_supervisor.norms.profiles.cautious import CautiousDrivingProfile
-from norm_supervisor.norms.profiles.efficient import EfficientDrivingProfile
-from norm_supervisor.consts import ACTION_STRINGS
+from norm_supervisor.norms.profiles.cautious import CautiousNormProfile, CautiousShieldProfile
+from norm_supervisor.norms.profiles.efficient import EfficientNormProfile, EfficientShieldProfile
 
 # Type alias for 1D array of floating points
 FloatArray1D = npt.NDArray[np.float64]
@@ -35,8 +34,10 @@ class Supervisor:
     """Supervisor class for enforcing metrics-driven norms in the HighwayEnv environment."""
     ACTIONS_ALL = DiscreteMetaAction.ACTIONS_ALL
     PROFILES: dict[str, AbstractNormProfile] = {
-        'cautious': CautiousDrivingProfile,
-        'efficient': EfficientDrivingProfile
+        'cautious': CautiousNormProfile,
+        'efficient': EfficientNormProfile,
+        'cautious_shield': CautiousShieldProfile,
+        'efficient_shield': EfficientShieldProfile
     }
 
     def __init__(

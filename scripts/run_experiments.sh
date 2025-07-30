@@ -4,8 +4,22 @@
 NUM_EXPERIMENTS=5
 NUM_EPISODES=100
 
+# ------------------ Environment configuration ------------------
+# If an environment (e.g., "4L20V" or "6L50V") is supplied as the first
+# positional argument, the script will run experiments only for that env.
+# Otherwise, it will iterate over BOTH envs in succession so the full run
+# can be launched once (e.g., overnight).
+# ---------------------------------------------------------------
+
+if [ $# -ge 1 ]; then
+    ENVIRONMENTS=("$1")
+else
+    # Run both envs sequentially when no arg provided
+    ENVIRONMENTS=("4L20V" "6L50V")
+fi
+
 # Set to true to overwrite existing results
-FORCE_WRITE=false
+FORCE_WRITE=true
 
 experiments=(
     # BASELINES
@@ -49,93 +63,100 @@ experiments=(
 
     # ABLATIONS
     # <profile>  <method>  <value>  <filter>
-    #" cautious   naive         nan  no-filter "
-    #" efficient  naive         nan  no-filter "
-    #" cautious   adaptive     0.01  no-filter "
+    " cautious   naive         nan  no-filter "
+    " efficient  naive         nan  no-filter "
+    " cautious   adaptive     0.01  no-filter "
     " cautious   adaptive     0.10  no-filter "
-    #" cautious   adaptive     1.00  no-filter "
-    #" efficient  adaptive     0.01  no-filter "
-    #" efficient  adaptive     0.10  no-filter "
-    #" efficient  adaptive     1.00  no-filter "
-    #" cautious   fixed        0.01  no-filter "
+    " cautious   adaptive     1.00  no-filter "
+    " efficient  adaptive     0.01  no-filter "
+    " efficient  adaptive     0.10  no-filter "
+    " efficient  adaptive     1.00  no-filter "
+    " cautious   fixed        0.01  no-filter "
     " cautious   fixed        0.10  no-filter "
-    #" cautious   fixed        1.00  no-filter "
-    #" efficient  fixed        0.01  no-filter "
-    #" efficient  fixed        0.10  no-filter "
-    #" efficient  fixed        1.00  no-filter "
+    " cautious   fixed        1.00  no-filter "
+    " efficient  fixed        0.01  no-filter "
+    " efficient  fixed        0.10  no-filter "
+    " efficient  fixed        1.00  no-filter "
     " cautious   projection    nan  no-filter "
-    #" efficient  projection    nan  no-filter "
+    " efficient  projection    nan  no-filter "
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Create results directory if it doesn't exist
-mkdir -p "$PROJECT_ROOT/results"
+for ENV in "${ENVIRONMENTS[@]}"; do
 
-for args in "${experiments[@]}"; do
-    read profile method value filter <<< "$args"
+    # Create results directory for this environment if it doesn't exist
+    mkdir -p "$PROJECT_ROOT/results/$ENV"
 
-    if [ "$filter" == "filter" ]; then
-        filter_arg="--filter"
-    else
-        filter_arg="--no-filter"
-    fi
+    for args in "${experiments[@]}"; do
+        read profile method value filter <<< "$args"
 
-    # Create subdirectory based on method and filter status
-    if [ "$method" == "nop" ]; then
-        if [ "$filter" == "filter" ]; then 
-            sub_dir="filter_only"
-        else 
-            sub_dir="unsupervised"
+        if [ "$filter" == "filter" ]; then
+            filter_arg="--filter"
+        else
+            filter_arg="--no-filter"
         fi
-    else
-        if [ "$filter" == "filter" ]; then 
-            filter_suffix="_filtered"
-        else 
-            filter_suffix="_unfiltered"
-        fi
-        sub_dir="${method}${filter_suffix}"
-    fi
 
-    # Create subdirectory with profile prefix
-    mkdir -p "$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}"
+        # Create subdirectory based on method and filter status
+        if [ "$method" == "nop" ]; then
+            if [ "$filter" == "filter" ]; then 
+                sub_dir="filter_only"
+            else 
+                sub_dir="unsupervised"
+            fi
+        else
+            if [ "$filter" == "filter" ]; then 
+                filter_suffix="_filtered"
+            else 
+                filter_suffix="_unfiltered"
+            fi
+            sub_dir="${method}${filter_suffix}"
+        fi
 
-    # Build output filename
-    if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
-        out_path="$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}/4L20V_4L20V_${value}.csv"
-        if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
-            echo "Overwriting existing results: $out_path"
-        elif [ -f "$out_path" ]; then
-            echo "Skipping existing results: $out_path"
-            continue
+        # Create subdirectory with profile prefix
+        mkdir -p "$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}"
+
+        # Build output filename
+        if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
+            file_prefix="4L20V_${ENV}"
+            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
+            if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
+                echo "Overwriting existing results: $out_path"
+            elif [ -f "$out_path" ]; then
+                echo "Skipping existing results: $out_path"
+                continue
+            fi
+            echo "Running ${profile} ${method} with value=${value} filter=${filter} -> $out_path"
+            python "$SCRIPT_DIR/test.py" \
+                --profile "$profile" \
+                --method "$method" \
+                --value "$value" \
+                "$filter_arg" \
+                --experiments "$NUM_EXPERIMENTS" \
+                --episodes "$NUM_EPISODES" \
+                --env "$ENV" \
+                --output "$out_path"
+        else
+            file_prefix="4L20V_${ENV}"
+            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
+            if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
+                echo "Overwriting existing results: $out_path"
+            elif [ -f "$out_path" ]; then
+                echo "Skipping existing results: $out_path"
+                continue
+            fi
+            echo "Running ${profile} ${method} filter=${filter} -> $out_path"
+            python "$SCRIPT_DIR/test.py" \
+                --profile "$profile" \
+                --method "$method" \
+                "$filter_arg" \
+                --experiments "$NUM_EXPERIMENTS" \
+                --episodes "$NUM_EPISODES" \
+                --env "$ENV" \
+                --output "$out_path"
         fi
-        echo "Running ${profile} ${method} with value=${value} filter=${filter} -> $out_path"
-        python "$SCRIPT_DIR/test.py" \
-            --profile "$profile" \
-            --method "$method" \
-            --value "$value" \
-            "$filter_arg" \
-            --experiments "$NUM_EXPERIMENTS" \
-            --episodes "$NUM_EPISODES" \
-            --output "$out_path"
-    else
-        out_path="$PROJECT_ROOT/results_few_constraints/${profile}/${sub_dir}/4L20V_4L20V.csv"
-        if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
-            echo "Overwriting existing results: $out_path"
-        elif [ -f "$out_path" ]; then
-            echo "Skipping existing results: $out_path"
-            continue
-        fi
-        echo "Running ${profile} ${method} filter=${filter} -> $out_path"
-        python "$SCRIPT_DIR/test.py" \
-            --profile "$profile" \
-            --method "$method" \
-            "$filter_arg" \
-            --experiments "$NUM_EXPERIMENTS" \
-            --episodes "$NUM_EPISODES" \
-            --output "$out_path"
-    fi
-done
+    done  # end experiments loop
+done      # end env loop
 
 echo "All experiments completed!"
