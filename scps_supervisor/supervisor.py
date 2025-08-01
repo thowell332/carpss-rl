@@ -1,4 +1,3 @@
-from collections import defaultdict
 from enum import Enum
 from typing import Optional
 from scipy.optimize import brentq
@@ -14,9 +13,9 @@ from highway_env.envs.common.action import DiscreteMetaAction
 from highway_env.envs.highway_env import HighwayEnv
 from stable_baselines3 import DQN
 
-from norm_supervisor.norms.profiles.abstract import AbstractNormProfile
-from norm_supervisor.norms.profiles.cautious import CautiousNormProfile, CautiousShieldProfile
-from norm_supervisor.norms.profiles.efficient import EfficientNormProfile, EfficientShieldProfile
+from scps_supervisor.norms.profiles.abstract import AbstractNormProfile
+from scps_supervisor.norms.profiles.cautious import CautiousNormProfile
+from scps_supervisor.norms.profiles.efficient import EfficientNormProfile
 
 # Type alias for 1D array of floating points
 FloatArray1D = npt.NDArray[np.float64]
@@ -24,7 +23,7 @@ IntArray1D = npt.NDArray[np.int32]
 
 class PolicyAugmentMethod(Enum):
     """Enum for supervisor methods."""
-    NOP        = 'nop'        # No KL-divergence method applied.
+    NOP        = 'nop'        # No policy augment method applied.
     NAIVE      = 'naive'      # Naive augment rule
     FIXED      = 'fixed'      # Use a fixed beta value
     ADAPTIVE   = 'adaptive'   # Adaptively calculate beta based on KL budget
@@ -36,8 +35,6 @@ class Supervisor:
     PROFILES: dict[str, AbstractNormProfile] = {
         'cautious': CautiousNormProfile,
         'efficient': EfficientNormProfile,
-        'cautious_shield': CautiousShieldProfile,
-        'efficient_shield': EfficientShieldProfile
     }
 
     def __init__(
@@ -237,12 +234,13 @@ class Supervisor:
         updated_policy_support /= np.sum(updated_policy_support)
         return updated_policy_support
     
-    def _augment_policy(self, policy: FloatArray1D) -> FloatArray1D:
-        """Augment the given policy to minimizes the expected norm violation cost.
+    def _augment_policy_scps(self, policy: FloatArray1D) -> FloatArray1D:
+        """Augment the given policy using SCPS to minimizes the expected norm violation cost.
 
-        The augmented policy is computed using either the 'fixed' or 'adaptive' method. When in
-        'fixed' mode, the provided value for beta is used to compute the new policy. When in
-        'adaptive' mode, the value for beta is computed to satisfy the KL-divergence constraint.
+        The augmented policy is computed using either the 'fixed', 'adaptive', or 'projection'
+        method. The 'fixed' method uses the provided beta_fixed value to compute the new policy,
+        while the 'adaptive' method computes the value for beta to satisfy the KL-divergence
+        constraint. In 'projection' mode, the cost-optimal projection is returned.
         """
         support_mask = ~np.isclose(policy, 0.0)
         policy_support = policy[support_mask]
@@ -363,12 +361,7 @@ class Supervisor:
         return updated_policy
 
     def decide_action(self, model: DQN, obs: Observation) -> Action:
-        """Decide which action the agent should take based on the updated policy.
-        
-        If the supervisor is in FILTER_ONLY mode, the model policy is filtered on hard constraints
-        and the highest probability action is returned. If the supervisor is in DEFAULT mode, the 
-        model policy is filtered and augmented for norm compliance, and the highest probability
-        action is returned.
+        """Decide which action the agent should take based on the policy update method.
 
         :param model: DQN model.
         :param obs: observation from the environment.
@@ -381,20 +374,18 @@ class Supervisor:
             policy = self._filter_policy(policy)
         
         # Augment the policy based on the supervisor mode
-        if self.method == PolicyAugmentMethod.NOP:
-            augmented_policy = policy
-        elif self.method == PolicyAugmentMethod.NAIVE:
-            augmented_policy = self._augment_policy_naive(policy)
-        elif self.method in [
+        if self.method == PolicyAugmentMethod.NAIVE:
+            policy = self._augment_policy_naive(policy)
+        if self.method in [
             PolicyAugmentMethod.ADAPTIVE,
             PolicyAugmentMethod.FIXED,
             PolicyAugmentMethod.PROJECTION
         ]:
-            augmented_policy = self._augment_policy(policy)
+            policy = self._augment_policy_scps(policy)
         else:
             raise ValueError(f"Unknown supervisor method: {self.method}")
-        
-        return augmented_policy.argmax()
+    
+        return policy.argmax()
         
     @staticmethod
     def print_obs(obs: Observation):
@@ -405,10 +396,3 @@ class Supervisor:
         for presence, x, y, vx, vy in obs[1:]:
             if presence:
                 print(f"Vehicle: x={x}, y={y}, vx={vx}, vy={vy}")
-
-
-# notes
-# when changing lanes, the ego vehicle acclerates first then moves to the new lane, 
-# we need to check if the ego vehicle is colliding with the vehicle in the same lane before the lane change
-# some collisions are caused by ego and a another vehicle switching into the same lane from opposite directions, this is a nuanced issue we might want to track and handle 
-# might need different logic for lane chage with leading vs following vehicles

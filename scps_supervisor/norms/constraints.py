@@ -5,10 +5,10 @@ from highway_env.envs.common.action import Action
 from highway_env.road.road import LaneIndex
 from highway_env.vehicle.controller import MDPVehicle
 
-from norm_supervisor.consts import ACTION_STRINGS
-from norm_supervisor.norms.abstract import AbstractConstraint
-from norm_supervisor.norms.prediction import get_next_speed, get_next_lane_index
-import norm_supervisor.metrics as metrics
+from scps_supervisor.consts import ACTION_STRINGS
+from scps_supervisor.norms.abstract import AbstractConstraint
+from scps_supervisor.norms.prediction import get_next_speed, get_next_lane_index
+import scps_supervisor.metrics as metrics
 
 class CollisionConstraint(AbstractConstraint):
     """Constraint for prohibiting collisions."""

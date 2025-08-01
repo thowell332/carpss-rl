@@ -10,9 +10,9 @@ import torch
 from stable_baselines3 import DQN
 from highway_env.envs.highway_env import HighwayEnv
 
-from norm_supervisor.norms.constraints import SafetyEnvelopeConstraint
-from norm_supervisor.supervisor import Supervisor, PolicyAugmentMethod
-import norm_supervisor.metrics as metrics
+from scps_supervisor.norms.constraints import SafetyEnvelopeConstraint
+from scps_supervisor.supervisor import Supervisor, PolicyAugmentMethod
+import scps_supervisor.metrics as metrics
 
 # Add the scripts directory to the path so we can import from test.py
 sys.path.append(os.path.dirname(__file__))

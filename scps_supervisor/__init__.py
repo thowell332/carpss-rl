@@ -1,7 +1,8 @@
 """
-Norm Supervisor Package
+SCPS Supervisor Package
 
-A package for implementing normative supervision in the HighwayEnv driving environment.
+A package for implementing State-wise Constrained Policy Shaping (SCPS) as a supervisor module in
+the HighwayEnv driving environment.
 """
 
 from .supervisor import Supervisor, PolicyAugmentMethod

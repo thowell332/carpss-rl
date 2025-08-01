@@ -24,12 +24,20 @@ plt.rcParams.update({
 
 # CMYK-safe, WCAG 2.0-compliant, grayscale distinguishable color codes
 colors = {
+    "edge": "white",
     "gray": "#949494",
     "medium_gray": "#949494",
     "dark_gray": "#474747",
     "purple": "#542c5d", #88007d",
     "teal": "#008381" #"#007f7c" #007f7f",
 }
+
+patterns = {
+    "unsupervised": "",
+    "cautious": "",
+    "efficient": ""
+}
+EDGE_WIDTH = 0.01
 
 # Utility function to compute left/right lane preferences for any number of lanes
 def compute_left_right_lane_preferences(stats, n_lanes=None):
@@ -304,10 +312,7 @@ def generate_markdown_tables(grouped_data):
     
     # Define metric categories and their display names
     summary_metric_categories = {
-        'Episode Metrics': ['mean_episode_length', 'collision_rate'],
-        'Safety Metrics': ['mean_speed', 'tet_1s', 'tet_2s', 'tet_3s', 'teud_1v', 'teud_2v', 'teud_3v'],
-        'Cost Metrics': ['cost_rate', 'avoided_cost_rate'],
-        'Lane Usage': []
+        'Core Metrics': ['collision_rate', 'cost_rate', 'mean_speed']
     }
     
     details_metric_categories = {
@@ -317,7 +322,7 @@ def generate_markdown_tables(grouped_data):
             'lane_change_tailgating_violation_rate', 'lane_change_braking_violation_rate',
             'collision_violation_rate', 'lane_change_collision_violation_rate'
         ],
-        'Cost Metrics': ['cost_rate', 'avoided_cost_rate']
+        'Cost Metrics': ['cost_rate']
     }
     
     # Create display names mapping
@@ -326,12 +331,6 @@ def generate_markdown_tables(grouped_data):
         'mean_episode_length'    : 'Episode Length (s)',
         'collision_rate'         : 'Collision Rate (hr⁻¹)',
         'mean_speed'             : 'Speed (m/s)',
-        'tet_1s'                 : 'TET 1s (%)',
-        'tet_2s'                 : 'TET 2s (%)',
-        'tet_3s'                 : 'TET 3s (%)',
-        'teud_1v'                : 'TEUD 1v (%)',
-        'teud_2v'                : 'TEUD 2v (%)',
-        'teud_3v'                : 'TEUD 3v (%)',
         'cost_rate'              : 'Cost Rate (hr⁻¹)',
         'avoided_cost_rate'      : 'Avoided Cost Rate (hr⁻¹)',
         
@@ -353,17 +352,7 @@ def generate_markdown_tables(grouped_data):
     display_names['left_lane_preference'] = 'Left Lane Preference (%)'
     display_names['right_lane_preference'] = 'Right Lane Preference (%)'
     
-    # Add lane usage metrics to display names
-    all_lane_cols = set()
-    for group_data in grouped_data.values():
-        stats, _ = calculate_statistics(group_data)
-        lane_cols = get_lane_columns(stats)
-        all_lane_cols.update(lane_cols)
-    # Instead of per-lane, use left/right
-    summary_metric_categories['Lane Usage'] = ['left_lane_preference', 'right_lane_preference']
-    # Add TEUD 1v to Safety Metrics
-    if 'teud_1v' not in summary_metric_categories['Safety Metrics']:
-        summary_metric_categories['Safety Metrics'].append('teud_1v')
+
 
     # Build header rows
     summary_header_cols = ['Method']
@@ -425,27 +414,11 @@ def generate_markdown_tables(grouped_data):
                     for metric in metrics:
                         if metric == 'collision_rate':
                             summary_row.append(format_collision_rate(group_data))
-                        elif metric in ['tet_1s', 'tet_2s', 'tet_3s', 'teud_1v', 'teud_2v', 'teud_3v']:
-                            if metric in stats:
-                                mean_val, std_val = stats[metric]
-                                mean_val *= 100
-                                std_val *= 100
-                                summary_row.append(format_statistic(mean_val, std_val, n_experiments, metric))
-                            else:
-                                summary_row.append("-")
-                        elif metric == 'left_lane_preference':
-                            if left_mean is not None:
-                                summary_row.append(format_statistic(left_mean * 100, left_std * 100, n_experiments, metric))
-                            else:
-                                summary_row.append("-")
-                        elif metric == 'right_lane_preference':
-                            if right_mean is not None:
-                                summary_row.append(format_statistic(right_mean * 100, right_std * 100, n_experiments, metric))
-                            else:
-                                summary_row.append("-")
+
+
                         elif metric in stats:
                             mean_val, std_val = stats[metric]
-                            if metric in ['cost_rate', 'avoided_cost_rate']:
+                            if metric in ['cost_rate']:
                                 mean_val *= 3600
                                 std_val *= 3600
                             summary_row.append(format_statistic(mean_val, std_val, n_experiments, metric))
@@ -547,7 +520,7 @@ def write_table_section(f, title, header_cols, rows):
         f.write("| " + " | ".join(str(cell) for cell in row) + " |\n")
 
 
-def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, projection_point = 1):
+def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, title, projection_point):
     """Generate line plots showing how metrics evolve with adaptive method values."""
     # Create plots subdirectory
     plots_dir = os.path.join(output_dir, 'plots')
@@ -656,9 +629,8 @@ def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, proj
 
         ax1.set_ylabel(r"Collision Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
         ax2.set_ylabel(r"Cost Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
-        ax2.set_xlabel(r"KL Budget $\left(\delta\right)$", fontsize=LABEL_FONTSIZE)
-        fig.suptitle(r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
-        in Zero-Shot Environment""", fontsize=SUPTITLE_FONTSIZE, y=0.96)
+        ax2.set_xlabel(r"KL Budget $\left(\bar\delta\right)$", fontsize=LABEL_FONTSIZE)
+        fig.suptitle(title, fontsize=SUPTITLE_FONTSIZE, y=0.96)
         for ax in [ax1, ax2]:
             ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
 
@@ -842,6 +814,8 @@ def generate_clustered_bar_plot(
             yerr=stats["unsupervised"]["ses"],
             label="Unsupervised",
             color=colors['gray'],
+            #edgecolor=colors['edge'],
+            hatch=patterns['unsupervised'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -851,6 +825,9 @@ def generate_clustered_bar_plot(
             yerr=stats["cautious_adaptive"]["ses"],
             label=r"Cautious",
             color=colors['teal'],
+            edgecolor=colors['edge'],
+            linewidth=EDGE_WIDTH,
+            hatch=patterns['cautious'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -860,6 +837,9 @@ def generate_clustered_bar_plot(
             yerr=stats["efficient_adaptive"]["ses"],
             label=r"Efficient",
             color=colors['purple'],
+            edgecolor=colors['edge'],
+            linewidth=EDGE_WIDTH,
+            hatch=patterns['efficient'],
             capsize=CAPS_SIZE,
         )
 
@@ -1118,7 +1098,13 @@ def main():
     # Generate adaptive trends plot
     if plot_adaptive_values:
         print("Generating adaptive trends plot...")
-        generate_adaptive_trend_plot(grouped_data, args.output_dir, plot_adaptive_values)
+        generate_adaptive_trend_plot(
+            grouped_data=grouped_data,
+            output_dir=args.output_dir,
+            adaptive_values=plot_adaptive_values,
+            title=r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
+            in Simple Zero-Shot Environment""",
+        projection_point=1.0)
     
     # Generate clustered-bar plots for unsafe TTC and unsafe distance
     print("Generating unsafe TTC bar plot...")

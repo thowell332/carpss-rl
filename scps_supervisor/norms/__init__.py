@@ -1,7 +1,7 @@
 """
 Norms Package
 
-Defines norms and constraints for the norm supervisor.
+Defines norms and constraints for the SCPS supervisor.
 """
 
 from .abstract import AbstractNorm

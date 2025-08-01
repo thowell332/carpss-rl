@@ -1,7 +1,7 @@
 """
 Norm Profiles Package
 
-Defines norm profiles to influence the driving behavior preferenced by the norm supervisor.
+Defines norm profiles to influence the driving behavior preferenced by the SCPS supervisor.
 """
 
 from .abstract import AbstractNormProfile

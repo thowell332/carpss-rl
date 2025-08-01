@@ -12,13 +12,19 @@ import torch
 from stable_baselines3 import DQN
 from highway_env.envs.highway_env import HighwayEnv
 
-from norm_supervisor.consts import VEHICLE_LENGTH, ACTION_STRINGS
-from norm_supervisor.norms.norms import TailgatingNorm
-from norm_supervisor.supervisor import Supervisor, PolicyAugmentMethod
-import norm_supervisor.metrics as metrics
+from scps_supervisor.consts import VEHICLE_LENGTH, ACTION_STRINGS
+from scps_supervisor.norms.norms import TailgatingNorm
+from scps_supervisor.supervisor import Supervisor, PolicyAugmentMethod
+import scps_supervisor.metrics as metrics
 
 # Configuration mappings
 CONFIGS = {
+    '2L10V': {
+        'model_file': '4_lanes_20_vehicles.zip',
+        'env_config': '2_lanes_10_vehicles.json',
+        'lanes': 2,
+        'policy_freq': 1
+    },
     '4L20V': {
         'model_file': '4_lanes_20_vehicles.zip',
         'env_config': '4_lanes_20_vehicles.json',
@@ -28,7 +34,7 @@ CONFIGS = {
     '6L50V': {
         'model_file': '4_lanes_20_vehicles.zip',
         'env_config': '6_lanes_50_vehicles.json',
-        'lanes': 5,
+        'lanes': 6,
         'policy_freq': 1
     }
 }
