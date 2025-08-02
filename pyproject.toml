@@ -3,15 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "norm-supervisor"
+name = "scps-supervisor"
 version = "0.1.0"
-description = "Normative supervision implemented for the HighwayEnv driving environment."
-authors = [
-    {name = "Thomas Howell", email = "thomas.howell@tufts.edu"},
-    {name = "Robert McPherson", email = "robert.mcpherson@tufts.edu"},
-    {name = "Phi Bui", email = "philip.bui@tufts.edu"},
-    {name = "Yuqi Ye", email = "yuqi.ye@tufts.edu"}
-]
+description = "SCPS algorithm implemented as a supervisor module for the HighwayEnv driving environment."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
