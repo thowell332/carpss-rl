@@ -41,12 +41,9 @@ For convienence, the in-distribution environment with four lanes and 20 vehicles
 ### 2.2. Installation
 
 ```bash
-# Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate  # or equivalent
-
-# Install the package
-(venv) pip install .  # or `pip install -e .` for editable installation
+source venv/bin/activate
+pip install .
 ```
 
 ## 3. Replication Instructions
@@ -66,12 +63,10 @@ python scripts/train.py
 Using the model trained in the previous step, or the pre-trained model included in `models/4_lanes_20_vehicles.zip`, run the full suite of experiments specified in `run_experiments.sh`. Note that if the `results/` directory is already populated, you either need to clear the directory or set `FORCE_WRITE=true` in the shell script to overwrite existing results.
 
 ```bash
-./run_experiments.sh # Runs the full suite of experiments in all three environments by default
+./run_experiments.sh <env>
 ```
 
-Note that this may take awhile, especially as the complexity of the environment increases.
-
-The results will be written as CSV files to the `results/` directory, with sub-directories for each environment.
+If no environment is provided, this script will default to running the entire suite of experiments for all three environment configurations. Note that this may take awhile, especially as the complexity of the environment increases. The results will be written as CSV files to the `results/` directory, with sub-directories for each environment.
 
 ### 3.3. Analyzing Results
 
