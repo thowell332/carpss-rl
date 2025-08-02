@@ -953,28 +953,21 @@ def main():
     and visualization plots for the experiment results.
     """
     parser = argparse.ArgumentParser(description='Analyze experiment results from CSV files')
-    parser.add_argument('--results-dir', default=None, 
-                       help='Directory containing CSV result files (default: script_dir/../results)')
-    parser.add_argument('--output-dir', default=None,
-                       help='Output directory for analysis files (default: script_dir/../analysis)')
+    parser.add_argument('--results-dir', required=True, 
+                       help='Directory containing CSV result files')
+    parser.add_argument('--output-dir', required=True,
+                       help='Output directory for analysis files')
     parser.add_argument('--fixed-values', default='0.01, 0.10, 1.00',
-                       help='Comma-separated list of allowed values for fixed method (e.g., 0.01,0.05,0.1)')
+                       help='Comma-separated list of values to include for fixed method (e.g., 0.01,0.10,1.0)')
     parser.add_argument('--adaptive-values', default='0.01, 0.10, 1.00',
-                       help='Comma-separated list of allowed values for adaptive method (e.g., 0.01,0.05,0.1)')
+                       help='Comma-separated list of values to include for adaptive method (e.g., 0.01,0.10,1.0)')
+    parser.add_argument('--plots', action='store_true',
+                       help='Generate visualization plots (default: False)')
     parser.add_argument('--plot-adaptive-values', default='0.01, 0.0316, 0.10, 0.3162, 1.00, 3.1623, 10.000',
                        help='Comma-separated list of adaptive values to include in trend plots')
     
+    
     args = parser.parse_args()
-    
-    # Get script directory for relative paths
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    
-    # Set default paths relative to project root
-    if args.results_dir is None:
-        args.results_dir = os.path.join(project_root, 'results')
-    if args.output_dir is None:
-        args.output_dir = os.path.join(project_root, 'analysis')
     
     # Parse allowed values for fixed and adaptive methods
     def parse_value_list(val):
@@ -1029,44 +1022,46 @@ def main():
     print("Generating summary table...")
     summary_rows = generate_summary_table(filtered_grouped_data)
     
-    # Generate adaptive trends plot
-    if plot_adaptive_values:
-        print("Generating adaptive trends plot...")
-        generate_adaptive_trend_plot(
-            grouped_data=grouped_data,
-            output_dir=args.output_dir,
-            adaptive_values=plot_adaptive_values,
-            title=r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
-            for the Complex Zero-Shot Environment""",
-        projection_point=3.1623)
-    
-    # Generate clustered-bar plots for unsafe TTC and unsafe distance
-    print("Generating unsafe TTC bar plot...")
-    generate_clustered_bar_plot(
-        grouped_data,
-        args.output_dir,
-        selected_value=0.10,
-        prefix="unsafe_ttc_",
-        y_label="Action Selection Rate",
-        plot_title="Action Selection Across Behavior Profiles\nDuring $\mathrm{TTC} < 3~\mathrm{s}$ Exposure",
-        desired_order=["faster", "idle", "slow", "lane"],
-    )
+    # Generate plots only if --plots flag is set
+    if args.plots:
+        # Generate adaptive trends plot
+        if plot_adaptive_values:
+            print("Generating adaptive trends plot...")
+            generate_adaptive_trend_plot(
+                grouped_data=grouped_data,
+                output_dir=args.output_dir,
+                adaptive_values=plot_adaptive_values,
+                title=r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
+                for the Complex Zero-Shot Environment""",
+            projection_point=3.1623)
+        
+        # Generate clustered-bar plots for unsafe TTC and unsafe distance
+        print("Generating unsafe TTC bar plot...")
+        generate_clustered_bar_plot(
+            grouped_data,
+            args.output_dir,
+            selected_value=0.10,
+            prefix="unsafe_ttc_",
+            y_label="Action Selection Rate",
+            plot_title="Action Selection Across Behavior Profiles\nDuring $\mathrm{TTC} < 3~\mathrm{s}$ Exposure",
+            desired_order=["faster", "idle", "slow", "lane"],
+        )
 
-    print("Generating unsafe distance bar plot...")
-    generate_clustered_bar_plot(
-        grouped_data,
-        args.output_dir,
-        selected_value=0.10,
-        prefix="unsafe_",
-        exclude_prefixes=["unsafe_ttc_"],
-        y_label="Action Selection Rate",
-        plot_title="Action Selection Across Behavior Profiles\nDuring $d < 3L$ Exposure",
-        desired_order=["faster", "idle", "slow", "lane"],
-    )
+        print("Generating unsafe distance bar plot...")
+        generate_clustered_bar_plot(
+            grouped_data,
+            args.output_dir,
+            selected_value=0.10,
+            prefix="unsafe_",
+            exclude_prefixes=["unsafe_ttc_"],
+            y_label="Action Selection Rate",
+            plot_title="Action Selection Across Behavior Profiles\nDuring $d < 3L$ Exposure",
+            desired_order=["faster", "idle", "slow", "lane"],
+        )
 
-    # Generate stacked bar plot for lane occupancy
-    print("Generating lane-occupancy stacked bar plot...")
-    generate_lane_occupancy_stacked_bar_plot(grouped_data, args.output_dir, selected_value=0.10)
+        # Generate stacked bar plot for lane occupancy
+        print("Generating lane-occupancy stacked bar plot...")
+        generate_lane_occupancy_stacked_bar_plot(grouped_data, args.output_dir, selected_value=0.10)
     
     # Write summary.md
     summary_file = os.path.join(args.output_dir, 'summary.md')

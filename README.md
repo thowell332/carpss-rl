@@ -20,17 +20,8 @@ For convienence, the in-distribution environment with four lanes and 20 vehicles
 - [models/](models/) - The pre-trained DQN model used in all of our experiments. This model was trained in the `4L20V` environment with the default training configuration.
 - [scps_supervisor/](scps_supervisor/) - Core package containing our implementation of the SCPS supervisor.
     - [supervisor.py](scps_supervisor/supervisor.py) - Main module for the SCPS supervisor implementation.
-    - [metrics.py](scps_supervisor/metrics.py) - Helper methods for computing useful metrics, like the TTC.
-    - [consts.py](scps_supervisor/consts.py) - Constant values used throughout the supervisor implementation, including vehicle length.
     - [norms/](scps_supervisor/norms/) - Norms package containing our implementation of norms and constraints.
-        - [abstract.py](scps_supervisor/norms/abstract.py) - Abstract classes for norms and constraints.
-        - [constraints.py](scps_supervisor/norms/constraints.py) - Module implementing our safety constraints.
-        - [norms.py](scps_supervisor/norms/norms.py) - Module implementing our behavioral norms.
-        - [prediction.py](scps_supervisor/norms/prediction.py) - Helper methods for computing the immediate effects of actions.
     - [profiles/](scps_supervisor/norms/profiles/) - Profiles package containing our implementation of the behavior profiles.
-        - [abstract.py](scps_supervisor/norms/profiles/abstract.py) - Abstract class for a behavior profile.
-        - [cautious.py](scps_supervisor/norms/profiles/cautious.py) - Module implementing the cautious profile.
-        - [efficient.py](scps_supervisor/norms/profiles/efficient.py) - Module implementing the efficient profile.
 - [scripts/](scripts/) - Useful scripts for training models, testing various methods, and debugging.
     - [train.py](scripts/train.py) - Train a new model using selected configuration files.
     - [test.py](scripts/test.py) - Test a pre-trained model with one of the available methods (unsupervised, filter-only, naive augment, fixed SCPS, adaptive SCPS, or cost-optimal projection).
@@ -88,6 +79,4 @@ To analyze the collected data, you can either inspect the CSV files, or use the 
 python scripts/analyze_results.py --results results/<env> --output analysis/<env>
 ```
 
-Summary statistics and plots will be written to the specified directory. Note that some of the plotting parameters, for example the projection point for the adaptive trends plot, require manually setting a value in the script to produce the desired output. Use `--help` to read all of the command-line options.
-
-Most of the relevant information from the experimental data will be written to a `summary.md` file in the specified output directory. This file contains information about the collision rate, norm violation cost rate, and vehicle speed for all experimental configurations.
+Summary statistics will be written to the specified directory. Most of the relevant information from the experimental data will be written to a `summary.md` file in the specified output directory. This file contains information about the collision rate, norm violation cost rate, and vehicle speed for all experimental configurations. Use `--help` to read all of the command-line options.
