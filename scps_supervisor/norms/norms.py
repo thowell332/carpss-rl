@@ -16,7 +16,11 @@ import scps_supervisor.metrics as metrics
 class SpeedNorm(AbstractNorm):
     """Norm for enforcing a target speed range."""
     def __init__(self, target_speed_range: tuple[float, float], weight: int = 1):
-        """Initialize the speed norm with a weight and a target speed range."""
+        """Initialize the speed norm with a weight and a target speed range.
+        
+        :param target_speed_range: tuple of (min_speed, max_speed) in m/s.
+        :param weight: the norm weight, used for prioritization.
+        """
         if target_speed_range[0] > target_speed_range[1]:
             raise ValueError("Target speed range must be a tuple of (min_speed, max_speed) where "
                              "min_speed <= max_speed.")
@@ -36,11 +40,21 @@ class SpeedNorm(AbstractNorm):
 
     @staticmethod
     def evaluate_criterion(vehicle: MDPVehicle, action: Action) -> float:
-        """Return the next speed of the ego vehicle."""
+        """Return the next speed of the ego vehicle.
+        
+        :param vehicle: the vehicle for which to evaluate the criterion.
+        :param action: the action to evaluate.
+        :return: the next speed of the vehicle in m/s.
+        """
         return get_next_speed(vehicle, action)
     
     def is_violating_action(self, vehicle: MDPVehicle, action: Action) -> bool:
-        """Check if the action produces a speed outside of the target speed range."""
+        """Check if the action produces a speed outside of the target speed range.
+        
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :return: True if the action results in a speed outside the target range, False otherwise.
+        """
         if action not in self.violating_actions:
             return False
 
@@ -53,7 +67,11 @@ class SpeedNorm(AbstractNorm):
 class BrakingNorm(AbstractNorm):
     """Norm constraint for avoiding sudden braking."""
     def __init__(self, min_ttc: float, weight: int = 1):
-        """Initialize the braking norm with a weight and a minimum TTC."""
+        """Initialize the braking norm with a weight and a minimum TTC.
+        
+        :param min_ttc: minimum TTC threshold in seconds.
+        :param weight: the norm weight, used for prioritization.
+        """
         super().__init__(
             violating_actions=[
                 ACTION_STRINGS["FASTER"],
@@ -75,7 +93,14 @@ class BrakingNorm(AbstractNorm):
         lane_index: LaneIndex = None,
         check_rear: bool = False
     ) -> float:
-        """Return the TTC between the ego vehicle and the leading or following vehicle."""
+        """Return the TTC between the ego vehicle and the leading or following vehicle.
+        
+        :param vehicle: the vehicle for which to evaluate the criterion.
+        :param action: the action to evaluate.
+        :param lane_index: optional lane index to check (if None, uses vehicle's current lane).
+        :param check_rear: if True, check TTC with following vehicle; if False, check with leading vehicle.
+        :return: the TTC value in seconds, or np.inf if there is no projected collision.
+        """
         next_speed = get_next_speed(vehicle, action)
         ttc_front, ttc_rear = metrics.calculate_neighbour_ttcs(vehicle, lane_index, next_speed)
         return ttc_rear if check_rear else ttc_front
@@ -87,7 +112,14 @@ class BrakingNorm(AbstractNorm):
         lane_index: LaneIndex = None,
         check_rear: bool = False
     ) -> bool:
-        """Check if the action produces or worsens a braking violation."""
+        """Check if the action produces or fails to mitigate a braking violation.
+        
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :param lane_index: optional lane index to check (if None, uses vehicle's current lane).
+        :param check_rear: if True, check TTC with following vehicle; if False, check with leading vehicle.
+        :return: True if the action violates the braking norm, False otherwise.
+        """
         if action not in self.violating_actions:
             return False
         
@@ -104,7 +136,11 @@ class BrakingNorm(AbstractNorm):
 class LaneChangeBrakingNorm(BrakingNorm):
     """Norm constraint for avoiding sudden braking due to lane changes."""
     def __init__(self, min_ttc: float, weight: int = 1):
-        """Initialize the braking constraint with a weight and a minimum TTC."""
+        """Initialize the braking constraint with a weight and a minimum TTC.
+        
+        :param min_ttc: minimum time-to-collision threshold in seconds.
+        :param weight: the norm weight, used for prioritization.
+        """
         super().__init__(min_ttc=min_ttc, weight=weight)
         self.violating_actions = [
             ACTION_STRINGS["LANE_LEFT"],
@@ -112,7 +148,12 @@ class LaneChangeBrakingNorm(BrakingNorm):
         ]
     
     def is_violating_action(self, vehicle: MDPVehicle, action: Action) -> bool:
-        """Check if the action produces or worsens a braking violation for lane changes."""
+        """Check if the action produces or fails to mitigate a braking violation for lane changes.
+        
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :return: True if the action violates the lane change braking norm, False otherwise.
+        """
         if action not in self.violating_actions:
             return False
         
@@ -131,7 +172,11 @@ class LaneChangeBrakingNorm(BrakingNorm):
 class TailgatingNorm(SafetyEnvelopeConstraint, AbstractNorm):
     """Norm constraint for enforcing a safe following distance."""
     def __init__(self, safe_distance: float, weight: int = 1):
-        """Initialize the tailgating norm with a weight and a safe distance."""
+        """Initialize the tailgating norm with a weight and a safe distance.
+        
+        :param safe_distance: minimum safe following distance in meters.
+        :param weight: the norm weight, used for prioritization.
+        """
         SafetyEnvelopeConstraint.__init__(self, safe_distance=safe_distance)
         AbstractNorm.__init__(self, violating_actions=self.violating_actions, weight=weight)
         
@@ -141,7 +186,11 @@ class TailgatingNorm(SafetyEnvelopeConstraint, AbstractNorm):
 class LaneChangeTailgatingNorm(LaneChangeSafetyEnvelopeConstraint, AbstractNorm):
     """Norm constraint for enforcing a safe following distance during lane changes."""
     def __init__(self, safe_distance: float, weight: int = 1):
-        """Initialize the lane change tailgating norm with a weight and a safe distance."""
+        """Initialize the lane change tailgating norm with a weight and a safe distance.
+        
+        :param safe_distance: minimum safe following distance in meters.
+        :param weight: the norm weight, used for prioritization.
+        """
         SafetyEnvelopeConstraint.__init__(self, safe_distance=safe_distance)
         AbstractNorm.__init__(self, violating_actions=self.violating_actions, weight=weight)
         
@@ -157,7 +206,11 @@ class LanePreference(Enum):
 class LaneKeepingNorm(AbstractNorm):
     """Norm constraint for enforcing lane keeping."""
     def __init__(self, lane_preference: LanePreference, weight: int = 1):
-        """Initialize the lane keeping norm with a weight."""
+        """Initialize the lane keeping norm with a weight.
+        
+        :param lane_preference: preferred lane (LEFT, RIGHT, or NONE).
+        :param weight: the norm weight, used for prioritization.
+        """
         super().__init__(
             violating_actions=[
                 ACTION_STRINGS["FASTER"],
@@ -172,11 +225,21 @@ class LaneKeepingNorm(AbstractNorm):
 
     @staticmethod
     def evaluate_criterion(vehicle: MDPVehicle, action: Action) -> LaneIndex:
-        """Return the next lane index after applying the action."""
+        """Return the next lane index after applying the action.
+        
+        :param vehicle: the vehicle for which to evaluate the criterion.
+        :param action: the action to evaluate.
+        :return: the next lane index as a tuple (from, to, lane_id).
+        """
         return get_next_lane_index(vehicle, action)
 
     def is_violating_action(self, vehicle: MDPVehicle, action: Action) -> bool:
-        """Check if the action results in a lane change outside of the preferred lanes."""
+        """Check if the action results in a lane change outside of the preferred lanes.
+        
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :return: True if the action results in a lane change outside preferred lanes, False otherwise.
+        """
         if action not in self.violating_actions or self.lane_preference == LanePreference.NONE:
             return False
         

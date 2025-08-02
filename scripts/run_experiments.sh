@@ -17,12 +17,12 @@ FORCE_WRITE=false
 experiments=(
     # BASELINES
     # <profile>  <method>  <value>  <filter>
-    #" cautious   nop           nan  no-filter "  # Cautious unsupervised
-    #" cautious   nop           nan  filter    "  # Cautious filter-only
-    #" cautious   naive         nan  filter    "  # Cautious naive augment
-    #" efficient  nop           nan  no-filter "  # Efficient unsupervised
-    #" efficient  nop           nan  filter    "  # Efficient filter-only
-    #" efficient  naive         nan  filter    "  # Efficient naive augment
+    " cautious   nop           nan  no-filter "  # Cautious unsupervised
+    " cautious   nop           nan  filter    "  # Cautious filter-only
+    " cautious   naive         nan  filter    "  # Cautious naive augment
+    " efficient  nop           nan  no-filter "  # Efficient unsupervised
+    " efficient  nop           nan  filter    "  # Efficient filter-only
+    " efficient  naive         nan  filter    "  # Efficient naive augment
 
     # ADAPTIVE
     # <profile>  <method>  <value>  <filter>
@@ -108,12 +108,12 @@ for ENV in "${ENVIRONMENTS[@]}"; do
         fi
 
         # Create subdirectory with profile prefix
-        mkdir -p "$PROJECT_ROOT/results_new/${ENV}/${profile}/${sub_dir}"
+        mkdir -p "$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}"
 
         # Build output filename
         if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
             file_prefix="4L20V_${ENV}"
-            out_path="$PROJECT_ROOT/results_new/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
+            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
             if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
                 echo "Overwriting existing results: $out_path"
             elif [ -f "$out_path" ]; then
@@ -132,7 +132,7 @@ for ENV in "${ENVIRONMENTS[@]}"; do
                 --output "$out_path"
         else
             file_prefix="4L20V_${ENV}"
-            out_path="$PROJECT_ROOT/results_new/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
+            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
             if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
                 echo "Overwriting existing results: $out_path"
             elif [ -f "$out_path" ]; then

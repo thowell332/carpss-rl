@@ -2,22 +2,37 @@
 import os
 import json
 import gymnasium
-import highway_env
 import torch
 from stable_baselines3 import DQN
 
 
 def list_configs(config_dir):
+    """List all JSON configuration files in the specified directory.
+    
+    :param config_dir: directory path to search for JSON files.
+    :return: sorted list of JSON filenames.
+    """
     files = [f for f in os.listdir(config_dir) if f.endswith(".json")]
     return sorted(files)
 
 
 def load_config(config_path):
+    """Load a JSON configuration file.
+    
+    :param config_path: path to the JSON configuration file.
+    :return: dictionary containing the configuration data.
+    """
     with open(config_path, "r") as f:
         return json.load(f)
 
 
 def choose_config(config_dir, config_type):
+    """Present a menu to choose a configuration file from the specified directory.
+    
+    :param config_dir: directory path to search for configuration files.
+    :param config_type: type of configuration (e.g., "training", "environment") for display purposes.
+    :return: dictionary containing the selected configuration data.
+    """
     configs = list_configs(config_dir)
     if not configs:
         print(f"No {config_type} config files found in '{config_dir}' directory.")
@@ -33,6 +48,7 @@ def choose_config(config_dir, config_type):
 
 
 def main():
+    """Main function to train a DQN model using selected configuration files."""
     # Check if CUDA is available and set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")

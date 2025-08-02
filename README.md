@@ -1,88 +1,93 @@
-# Constrained Policy Shaping for Deployment-Phase Behavior Preferencing
+# State-Wise Constrained Policy Shaping: Runtime Behavior Steering for Safe Reinforcement Learning
 
-This project implements a normative supervisor which augments the actions of a pretrained DQN agent to enforce driving norms and safety constraints. The agent is trained and tested in the [HighwayEnv](https://github.com/Farama-Foundation/HighwayEnv/tree/master) simulation environment using the configurations under the `configs/` directory.
+This project contains all of the source code, raw results, and plots for the self-titled submission to AAAI-AIA-26.
 
 ## Table of Contents
-- [1. Getting Started](#1-getting-started)
-    - [1.1. Prerequisites](#11-prerequisites)
-    - [1.2. Installation](#12-installation)
-- [2. Project Structure](#2-project-structure)
-- [3. Usage](#3-usage)
+- [1. Project Structure](#1-project-structure)
+- [2. Getting Started](#2-getting-started)
+- [3. Replication Instructions](#3-usage)
     - [3.1. Training Models](#31-training-models)
     - [3.2. Running Experiments](#32-running-experiments)
     - [3.3. Analyzing Results](#33-analyzing-results)
-- [4. License](#4-license)
 
-## 1. Getting Started
+## 1. Project Structure
 
-### 1.1. Prerequisites
+For convienence, the in-distribution environment with four lanes and 20 vehicles is referred to as `4L20V`; similarly, the complex zero-shot environment with six lanes and 50 vehicles is referred to as `6L50V` and the simple zero-shot environment with two lanes and ten vehicles is referred to as `2L10V`.
+
+- [configs/](configs/) - Training and environment configuration files.
+    - [environment/](configs/environment/) - Environment configurations for `4L20V`, `6L50V`, and `2L10V`. Note that all environment configurations are identical except for the number of lanes and the number of vehicles.
+    - [training/](configs/training/) - Configuration for training the DQN model. All hyperparameter values are the defaults from Stable-Baselines3.
+- [models/](models/) - The pre-trained DQN model used in all of our experiments. This model was trained in the `4L20V` environment with the default training configuration.
+- [scps_supervisor/](scps_supervisor/) - Core package containing our implementation of the SCPS supervisor.
+    - [supervisor.py](scps_supervisor/supervisor.py) - Main module for the SCPS supervisor implementation.
+    - [metrics.py](scps_supervisor/metrics.py) - Helper methods for computing useful metrics, like the TTC.
+    - [consts.py](scps_supervisor/consts.py) - Constant values used throughout the supervisor implementation, including vehicle length.
+    - [norms/](scps_supervisor/norms/) - Norms package containing our implementation of norms and constraints.
+        - [abstract.py](scps_supervisor/norms/abstract.py) - Abstract classes for norms and constraints.
+        - [constraints.py](scps_supervisor/norms/constraints.py) - Module implementing our safety constraints.
+        - [norms.py](scps_supervisor/norms/norms.py) - Module implementing our behavioral norms.
+        - [prediction.py](scps_supervisor/norms/prediction.py) - Helper methods for computing the immediate effects of actions.
+    - [profiles/](scps_supervisor/norms/profiles/) - Profiles package containing our implementation of the behavior profiles.
+        - [abstract.py](scps_supervisor/norms/profiles/abstract.py) - Abstract class for a behavior profile.
+        - [cautious.py](scps_supervisor/norms/profiles/cautious.py) - Module implementing the cautious profile.
+        - [efficient.py](scps_supervisor/norms/profiles/efficient.py) - Module implementing the efficient profile.
+- [scripts/](scripts/) - Useful scripts for training models, testing various methods, and debugging.
+    - [train.py](scripts/train.py) - Train a new model using selected configuration files.
+    - [test.py](scripts/test.py) - Test a pre-trained model with one of the available methods (unsupervised, filter-only, naive augment, fixed SCPS, adaptive SCPS, or cost-optimal projection).
+    - [run_experiments.sh](scripts/run_experiments.sh) - Useful script for running multiple experiments and recording the results.
+    - [analyze_results.py](scripts/analyze_results.py) - Analysis script for generating tables and plots from recorded results.
+    - [debug_collision.py](scripts/debug_collision.py) - Debugging script for replaying a specific episode under the selected configuration with the GUI enabled.
+- [results/](results/) - Raw CSV results for the pre-trained model in `4L20V`, `6L50V`, and `2L10V` environments.
+- [analysis/](analysis/) - Analysis generated from the raw results in each environment, including markdown tables and plots.
+
+## 2. Getting Started
+
+### 2.1. Prerequisites
 
 - `python >= 3.9`
 - `virtualenv` (recommended)
 
-### 1.2. Installation
+### 2.2. Installation
 
 ```bash
 # Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # or equivalent
 
 # Install the package
-pip install .  # Or for editable installation: "pip install -e ."
+(venv) pip install .  # or `pip install -e .` for editable installation
 ```
 
-## 2. Project Structure
+## 3. Replication Instructions
 
-```
-norm-supervised-highway/
-├── norm_supervisor/          # Main package
-│   ├── supervisor.py         # Core normative supervisor
-│   ├── metrics.py            # Safety metrics calculation
-│   ├── consts.py             # Constants and utilities
-│   └── norms/                # Norm implementations
-│       ├── norms.py          # Driving norm definitions
-│       ├── abstract.py       # Abstract norm base classes
-│       ├── prediction.py     # Action outcome prediction
-│       └── profiles/         # Driving behavior profiles
-├── scripts/                  # Main execution scripts
-│   ├── train.py              # Train DQN models
-│   ├── test.py               # Run experiments with supervision
-│   └── analyze_results.py    # Analyze experiment results
-├── scripts/old/              # Legacy scripts (for reference)
-├── configs/                  # Configuration files
-│   ├── training/             # Training configurations
-│   └── environment/          # Environment configurations
-├── models/                   # Trained model storage
-├── results/                  # Experiment results
-└── pyproject.toml            # Package configuration
-```
-
-## 3. Usage
+This section describes the full set of instructions required to replicate all of the results presented in our paper/
 
 ### 3.1. Training Models
+
+To train the base DQN model, run the `train.py` script. When prompted, choose the `default.json` training configuration and the `4_lanes_20_vehicles.json` environment configuration.
 
 ```bash
 python scripts/train.py
 ```
 
-Select training and environment configurations when prompted.
-
 ### 3.2. Running Experiments
 
+Using the model trained in the previous step, or the pre-trained model included in `models/4_lanes_20_vehicles.zip`, run the full suite of experiments specified in `run_experiments.sh`. Note that if the `results/` directory is already populated, you either need to clear the directory or set `FORCE_WRITE=true` in the shell script to overwrite existing results.
+
 ```bash
-python scripts/test.py
+./run_experiments.sh # Runs the full suite of experiments in all three environments by default
 ```
 
-Choose models, environment configurations, and supervision parameters. Results of the test are written to `results/` by default. Use `--help` to read all of the command-line options.
+The results will be written as CSV files to the `results/` directory, with sub-directories for each environment.
 
 ### 3.3. Analyzing Results
 
+To analyze the collected data, you can either inspect the CSV files, or use the analysis script which is provided for convenience.
+
 ```bash
-python scripts/analyze_results.py
+python scripts/analyze_results.py --results results/<env> --output analysis/<env>
 ```
 
-Processes CSV files in `results/` to generate summary statistics, which are written to `analysis/` by default. Use `--help` to read all of the command-line options.
+Summary statistics and plots will be written to the specified directory. Note that some of the plotting parameters, for example the projection point for the adaptive trends plot, require manually setting a value in the script to produce the desired output. Use `--help` to read all of the command-line options.
 
-## 4. License
-
-Released under the MIT License.
+Most of the relevant information from the experimental data will be written to a `summary.md` file in the specified output directory. This file contains information about the collision rate, norm violation cost rate, and vehicle speed for all experimental configurations.

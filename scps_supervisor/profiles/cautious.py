@@ -1,6 +1,6 @@
 from scps_supervisor.consts import VEHICLE_LENGTH
 from scps_supervisor.norms.norms import LanePreference
-from scps_supervisor.norms.profiles.abstract import AbstractNormProfile
+from scps_supervisor.profiles.abstract import AbstractNormProfile
 
 class CautiousNormProfile(AbstractNormProfile):
     """Profile for cautious driving norms."""

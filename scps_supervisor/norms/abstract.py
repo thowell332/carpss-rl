@@ -21,6 +21,8 @@ class AbstractConstraint(ABC):
         """Evaluate the criterion for the norm constraint.
 
         :param vehicle: the vehicle for which to evaluate the criterion.
+        :param *args: additional positional arguments for the criterion evaluation.
+        :param **kwargs: additional keyword arguments for the criterion evaluation.
         :return: the value of the criterion.
         """
         pass
@@ -34,12 +36,14 @@ class AbstractConstraint(ABC):
         
         :param vehicle: the vehicle to check.
         :param action: the action to check.
+        :param *args: additional positional arguments for violation checking.
+        :param **kwargs: additional keyword arguments for violation checking.
         :return: True if the provided action is norm-violating, False otherwise.
         """
         pass
     
     def __str__(self):
-        """To string function."""
+        """Return a string representation of the constraint."""
         pass
 
 class AbstractNorm(AbstractConstraint):
@@ -48,8 +52,8 @@ class AbstractNorm(AbstractConstraint):
     def __init__(self, violating_actions: list[Action], weight: int = 1) -> None:
         """Initialize the norm with a weight and a list of potentially violating actions.
 
-        :param weight: the norm weight, used for prioritization.
         :param violating_actions: list of potentially norm-violating actions.
+        :param weight: the norm weight, used for prioritization.
         """
         super().__init__(violating_actions)
 

@@ -221,7 +221,11 @@ class EpisodeMetrics:
             self.current_unsafe_ttc_duration = 0
     
     def _safe_nanmean(self, data):
-        """Calculate nanmean safely, avoiding empty slice warnings."""
+        """Calculate nanmean safely, avoiding empty slice warnings.
+        
+        :param data: list or array of numeric values, may contain NaN values.
+        :return: the mean of non-NaN values, or np.nan if all values are NaN or data is empty.
+        """
         if not data or all(np.isnan(x) for x in data):
             return np.nan
         return np.nanmean(data)
@@ -651,7 +655,11 @@ def parse_arguments():
 
 
 def main():
-    """Main function."""
+    """Main function to run norm-supervised highway driving experiments.
+    
+    Parses command line arguments, creates experiment configuration, and runs all experiments
+    with the specified parameters.
+    """
     try:
         args = parse_arguments()
         config = ExperimentConfig(args)

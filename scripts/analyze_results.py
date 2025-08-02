@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Analysis script for norm supervisor experiment results.
+
 Scans CSV files in results directory and generates summary statistics.
 """
 
@@ -22,71 +23,45 @@ plt.rcParams.update({
     "text.latex.preamble": r"\usepackage{times}",
 })
 
-# CMYK-safe, WCAG 2.0-compliant, grayscale distinguishable color codes
 colors = {
-    "edge": "white",
     "gray": "#949494",
     "medium_gray": "#949494",
     "dark_gray": "#474747",
-    "purple": "#542c5d", #88007d",
-    "teal": "#008381" #"#007f7c" #007f7f",
+    "purple": "#542c5d",
+    "teal": "#008381"
 }
-
-patterns = {
-    "unsupervised": "",
-    "cautious": "",
-    "efficient": ""
-}
-EDGE_WIDTH = 0.01
-
-# Utility function to compute left/right lane preferences for any number of lanes
-def compute_left_right_lane_preferences(stats, n_lanes=None):
-    """Given a stats dict (col: (mean, std)), compute left/right lane preferences and their std errors."""
-    # Find all lane_X_preference columns
-    lane_cols = sorted([col for col in stats.keys() if col.startswith('lane_') and col.endswith('_preference')],
-                       key=lambda x: int(x.split('_')[1]))
-    if not lane_cols:
-        return None, None, None, None
-    if n_lanes is None:
-        n_lanes = len(lane_cols)
-    half = n_lanes // 2
-    left_cols = lane_cols[:half]
-    right_cols = lane_cols[half:]
-    # Sum means and propagate std errors (sqrt of sum of variances)
-    left_mean = sum(stats[col][0] for col in left_cols if col in stats)
-    right_mean = sum(stats[col][0] for col in right_cols if col in stats)
-    left_std = np.sqrt(sum((stats[col][1] ** 2) for col in left_cols if col in stats))
-    right_std = np.sqrt(sum((stats[col][1] ** 2) for col in right_cols if col in stats))
-    return left_mean, left_std, right_mean, right_std
 
 
 def list_csv_files(directory):
-    """List all CSV files in the given directory and subdirectories, skipping any 'ignore' directories."""
+    """List all CSV files in the given directory and subdirectories, skipping any 'ignore' directories.
+    
+    :param directory: Directory to search for CSV files.
+    :return: Sorted list of relative CSV file paths.
+    """
     if not os.path.exists(directory):
         return []
-    
     csv_files = []
     for root, dirs, files in os.walk(directory):
-        # Skip any directory named 'ignore'
         if 'ignore' in dirs:
             dirs.remove('ignore')
         if os.path.basename(root) == 'ignore':
             continue
         for file in files:
             if file.endswith('.csv'):
-                # Get relative path from the results directory
                 rel_path = os.path.relpath(os.path.join(root, file), directory)
                 csv_files.append(rel_path)
-    
     return sorted(csv_files)
 
 
 def parse_configuration_from_filename(filename):
-    """Parse configuration from filename format: profile/method/model_env_value.csv"""
+    """Parse configuration from filename format: profile/method/model_env_value.csv
+    
+    :param filename: Path to the CSV file.
+    :return: Dictionary with parsed configuration fields.
+    """
     base = os.path.basename(filename)
     name, _ = os.path.splitext(base)
     parts = name.split('_')
-    
     model = parts[0]
     env = parts[1]
     value = None
@@ -95,10 +70,7 @@ def parse_configuration_from_filename(filename):
             value = float(parts[2])
         except ValueError:
             value = None
-    
-    # Get method from parent directory
     method = os.path.basename(os.path.dirname(filename))
-    # Remove _filtered/_unfiltered suffix for label purposes
     if method.endswith('_filtered'):
         method_base = method[:-9]
         filtered = True
@@ -108,10 +80,7 @@ def parse_configuration_from_filename(filename):
     else:
         method_base = method
         filtered = False
-    
-    # Get profile from grandparent directory
     profile = os.path.basename(os.path.dirname(os.path.dirname(filename)))
-    
     return {
         'profile': profile,
         'method': method_base,
@@ -125,45 +94,43 @@ def parse_configuration_from_filename(filename):
 
 
 def load_and_group_data(results_dir):
-    """Load all CSV files and group by configuration."""
-    csv_files = list_csv_files(results_dir)
+    """Load all CSV files and group by configuration.
     
+    :param results_dir: Directory containing result CSV files.
+    :return: Dictionary mapping configuration tuples to lists of DataFrames.
+    """
+    csv_files = list_csv_files(results_dir)
     if not csv_files:
         print(f"No CSV files found in '{results_dir}'")
         return {}
-    
     grouped_data = defaultdict(list)
-    
     for filename in csv_files:
         config = parse_configuration_from_filename(filename)
         if config is None:
             print(f"Warning: Could not parse configuration from filename: {filename}")
             continue
-        
         filepath = os.path.join(results_dir, filename)
         try:
             df = pd.read_csv(filepath)
             if not df.empty:
-                # Add configuration info to each row
                 for key, value in config.items():
                     df[key] = value
                 grouped_data[tuple(sorted(config.items()))].append(df)
         except Exception as e:
             print(f"Warning: Could not read {filename}: {e}")
-    
     return grouped_data
 
 
 def calculate_statistics(group_data):
-    """Calculate mean and standard deviation for all numeric columns."""
-    # Combine all dataframes in the group
-    combined_df = pd.concat(group_data, ignore_index=True)
+    """Calculate mean and standard deviation for all numeric columns.
     
-    # Get numeric columns (excluding configuration columns)
+    :param group_data: List of DataFrames for a configuration group.
+    :return: Tuple of (stats dictionary, number of experiments).
+    """
+    combined_df = pd.concat(group_data, ignore_index=True)
     config_cols = ['profile', 'method', 'value', 'model', 'env', 'mode']
     numeric_cols = [col for col in combined_df.columns 
                    if col not in config_cols and combined_df[col].dtype in ['float64', 'int64']]
-    
     stats = {}
     for col in numeric_cols:
         values = combined_df[col].dropna()
@@ -173,35 +140,34 @@ def calculate_statistics(group_data):
             stats[col] = (mean_val, std_val)
         else:
             stats[col] = (np.nan, np.nan)
-    
     return stats, len(combined_df)
 
 
 def format_statistic(mean_val, std_val, n_experiments, metric_name=None):
-    """Format mean and standard error as 'mean ± SE'."""
+    """Format mean and standard error as 'mean ± SE'.
+    
+    :param mean_val: mean value to format.
+    :param std_val: standard deviation value.
+    :param n_experiments: number of experiments for standard error calculation.
+    :param metric_name: optional metric name for additional context.
+    :return: formatted string showing mean ± standard error, or "-" if insufficient data.
+    """
     if pd.isna(mean_val) or pd.isna(std_val) or n_experiments <= 1:
         return "-"
-    
-    # Calculate standard error
     se_val = std_val / np.sqrt(n_experiments)
     return f"{mean_val:.2f} ± {se_val:.2f}"
 
 
-def format_median_iqr(median_val, q1_val, q3_val, iqr_val):
-    """Format median and IQR as "median (Q1Q3)"."""
-    if pd.isna(median_val) or pd.isna(q1_val) or pd.isna(q3_val) or pd.isna(iqr_val):
-        return "-"
-    
-    return f"{median_val:.2f} ({q1_val:.2f} - {q3_val:.2f})"
-
-
 def format_collision_rate(group_data):
-    """Format collision rate per hour."""
+    """Format collision rate per hour.
+    
+    :param group_data: List of DataFrames for a configuration group.
+    :return: Collision rate formatted as string.
+    """
     total_distance = 0
     total_collisions = 0
     total_time_seconds = 0
     policy_period = 1  # TODO: Use environment config
-    
     for df in group_data:
         if (
             'total_collisions' in df.columns
@@ -219,11 +185,9 @@ def format_collision_rate(group_data):
                     total_distance += distance
                     total_collisions += collisions
                     total_time_seconds += ep_length * policy_period * num_episodes
-    
     if total_collisions == 0:
         return "0.00"
     else:
-        # Calculate collision rate per hour
         total_time_hours = total_time_seconds / 3600
         collision_rate = total_collisions / total_time_hours
         # NOTE: We can model the collision data as a binomial distribution where each episode is a
@@ -240,13 +204,12 @@ def format_collision_rate(group_data):
         return f"{collision_rate:.2f} ± {se_collision_rate:.2f}"
 
 
-def get_lane_columns(stats):
-    """Get lane time columns from statistics."""
-    return sorted([col for col in stats.keys() if col.startswith('lane_') and col.endswith('_preference')])
-
-
 def compute_success_rate(group_data):
-    """Compute success rate as percentage of episodes without collision."""
+    """Compute success rate as percentage of episodes without collision.
+    
+    :param group_data: List of DataFrames for a configuration group.
+    :return: Success rate as a percentage string.
+    """
     total_collisions = 0
     total_episodes = 0
     for df in group_data:
@@ -260,57 +223,47 @@ def compute_success_rate(group_data):
 
 
 def create_config_name(config_dict):
-    """Create a readable configuration name."""
-    if config_dict['method'] in ['adaptive', 'fixed'] and config_dict['value'] is not None:
-        # Format value as power of 10
-        value = config_dict['value']
-        if value == 0.01:
-            value_str = "10⁻²"
-        elif value == 0.0316:
-            value_str = "10⁻¹·⁵"
-        elif value == 0.10:
-            value_str = "10⁻¹"
-        elif value == 0.3162:
-            value_str = "10⁻⁰·⁵"
-        elif value == 1.00:
-            value_str = "10⁰"
-        else:
-            value_str = str(value)
-        return f"{config_dict['method'].title()} ({value_str})"
-    elif config_dict['method'] == 'naive':
-        return f"{config_dict['method'].title()}"
-    else:
-        return f"{config_dict['method'].title()}"
+    """Return a concise label for a configuration.
+    
+    :param config_dict: Configuration dictionary.
+    :return: Concise label string.
+    """
+    method = config_dict.get('method', '').title()
+    value = config_dict.get('value')
+    if method.lower() in {'adaptive', 'fixed'} and value is not None:
+        return f"{method} ({value:g})"
+    return method
 
 
 def method_sort_key(config):
-    """Sort key for methods."""
+    """Sort key for methods.
+    
+    :param config: Configuration dictionary.
+    :return: Tuple used for sorting methods.
+    """
     method = config.get('method', '').lower()
     value = config.get('value', 0)
-    # Unsupervised first
     if method == 'unsupervised':
         return (0, 0, 0)
-    # Filter Only second
     elif method == 'filter_only':
         return (1, 0, 0)
-    # Naive third
     elif method == 'naive':
         return (2, 0, 0)
-    # Adaptive next, sorted by value
     elif method == 'adaptive':
         return (3, 0, float(value) if value is not None else 0)
-    # Fixed next, sorted by value
     elif method == 'fixed':
         return (4, 0, float(value) if value is not None else 0)
-    # Default fallback
     else:
         return (99, 0, 0)
 
 
 def generate_markdown_tables(grouped_data):
-    """Generate markdown tables from grouped data, one per model-environment combination."""
+    """Generate markdown tables from grouped data, one per model-environment combination.
     
-    # Define metric categories and their display names
+    :param grouped_data: Dictionary mapping configuration tuples to lists of DataFrames.
+    :return: Tuple of (summary_tables, details_tables).
+    """
+    
     summary_metric_categories = {
         'Core Metrics': ['collision_rate', 'cost_rate', 'mean_speed']
     }
@@ -325,35 +278,24 @@ def generate_markdown_tables(grouped_data):
         'Cost Metrics': ['cost_rate']
     }
     
-    # Create display names mapping
     display_names = {
         # Summary metrics
         'mean_episode_length'    : 'Episode Length (s)',
-        'collision_rate'         : 'Collision Rate (hr⁻¹)',
+        'collision_rate'         : 'Collision Rate (hr^-1)',
         'mean_speed'             : 'Speed (m/s)',
-        'cost_rate'              : 'Cost Rate (hr⁻¹)',
-        'avoided_cost_rate'      : 'Avoided Cost Rate (hr⁻¹)',
+        'cost_rate'              : 'Cost Rate (hr^-1)',
+        'avoided_cost_rate'      : 'Avoided Cost Rate (hr^-1)',
         
         # Details metrics
-        'speed_violation_rate'                 : 'Speed Violations (hr⁻¹)',
-        'tailgating_violation_rate'            : 'Tailgating Violations (hr⁻¹)',
-        'braking_violation_rate'               : 'Braking Violations (hr⁻¹)',
-        'lane_keeping_violation_rate'          : 'LaneKeeping Violations (hr⁻¹)',
-        'lane_change_tailgating_violation_rate': 'Lane Change Tailgating Violations (hr⁻¹)',
-        'lane_change_braking_violation_rate'   : 'Lane Change Braking Violations (hr⁻¹)',
-        'collision_violation_rate'             : 'Collision Violations (hr⁻¹)',
-        'lane_change_collision_violation_rate' : 'Lane Change Collision Violations (hr⁻¹)',
-        
-        # Lane usage metrics (old, will be replaced)
-        # 'lane_0_preference': 'Left Lane Preference (%)',
-        # 'lane_1_preference': 'Right Lane Preference (%)'
+        'speed_violation_rate'                 : 'Speed Violations (hr^-1)',
+        'tailgating_violation_rate'            : 'Tailgating Violations (hr^-1)',
+        'braking_violation_rate'               : 'Braking Violations (hr^-1)',
+        'lane_keeping_violation_rate'          : 'LaneKeeping Violations (hr^-1)',
+        'lane_change_tailgating_violation_rate': 'Lane Change Tailgating Violations (hr^-1)',
+        'lane_change_braking_violation_rate'   : 'Lane Change Braking Violations (hr^-1)',
+        'collision_violation_rate'             : 'Collision Violations (hr^-1)',
+        'lane_change_collision_violation_rate' : 'Lane Change Collision Violations (hr^-1)',
     }
-    # Add new left/right lane preference display names
-    display_names['left_lane_preference'] = 'Left Lane Preference (%)'
-    display_names['right_lane_preference'] = 'Right Lane Preference (%)'
-    
-
-
     # Build header rows
     summary_header_cols = ['Method']
     for category, metrics in summary_metric_categories.items():
@@ -406,8 +348,7 @@ def generate_markdown_tables(grouped_data):
                 config_dict = dict(config_tuple)
                 stats, n_experiments = calculate_statistics(group_data)
                 config_name = create_config_name(config_dict)
-                # Compute left/right lane preferences
-                left_mean, left_std, right_mean, right_std = compute_left_right_lane_preferences(stats)
+
                 # Build summary data row
                 summary_row = [config_name]
                 for category, metrics in summary_metric_categories.items():
@@ -671,7 +612,7 @@ def generate_clustered_bar_plot(
     output_dir : str
         Directory where `plots/` subfolder will be created (if not present).
     selected_value : float, optional
-        δ value to pick for the adaptive β experiments (default 1.0).
+        delta value to pick for the adaptive beta experiments (default 1.0).
     prefix : str, optional
         Column-name prefix (e.g., ``"unsafe_"`` or ``"unsafe_ttc_"``).
     suffix : str, optional
@@ -686,12 +627,6 @@ def generate_clustered_bar_plot(
         Label for the y-axis.
     plot_title : str, optional
         If provided, override the automatic title.
-
-    This plot compares three experiment configurations for every model–environment
-    combination:
-        1. Unsupervised baseline.
-        2. Cautious profile – Adaptive (δ = *selected_value*) – *filtered*.
-        3. Efficient profile – Adaptive (δ = *selected_value*) – *filtered*.
     """
 
     from collections import defaultdict
@@ -723,7 +658,7 @@ def generate_clustered_bar_plot(
         if cfg.get("method") == "unsupervised":
             groups_by_model_env[key]["unsupervised"].extend(group_data)
 
-        # Adaptive β (δ = selected_value), filtered
+        # Adaptive beta (delta = selected_value), filtered
         elif (
             cfg.get("method") == "adaptive"
             and cfg.get("filtered", False)
@@ -814,8 +749,6 @@ def generate_clustered_bar_plot(
             yerr=stats["unsupervised"]["ses"],
             label="Unsupervised",
             color=colors['gray'],
-            #edgecolor=colors['edge'],
-            hatch=patterns['unsupervised'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -825,9 +758,6 @@ def generate_clustered_bar_plot(
             yerr=stats["cautious_adaptive"]["ses"],
             label=r"Cautious",
             color=colors['teal'],
-            edgecolor=colors['edge'],
-            linewidth=EDGE_WIDTH,
-            hatch=patterns['cautious'],
             capsize=CAPS_SIZE,
         )
         ax.bar(
@@ -837,9 +767,6 @@ def generate_clustered_bar_plot(
             yerr=stats["efficient_adaptive"]["ses"],
             label=r"Efficient",
             color=colors['purple'],
-            edgecolor=colors['edge'],
-            linewidth=EDGE_WIDTH,
-            hatch=patterns['efficient'],
             capsize=CAPS_SIZE,
         )
 
@@ -873,12 +800,6 @@ def generate_clustered_bar_plot(
         plt.close()
         print(f"Bar plot saved to: {plot_file}")
 
-
-# ---------------------------------------------------------------------
-# Lane-occupancy stacked bar chart
-# ---------------------------------------------------------------------
-
-
 def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_value=1.00):
     """Generate stacked bar charts of lane occupancy distribution.
 
@@ -893,9 +814,7 @@ def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_
     FIGSIZE = (3.25, 2.6)
     TITLE_FONTSIZE = 10
     LABEL_FONTSIZE = 9
-    TICK_FONTSIZE = 8
     LEGEND_FONTSIZE = 7
-    LEGEND_TITLE_FONTSIZE = 7
     BAR_HEIGHT = 0.8
 
     plots_dir = os.path.join(output_dir, "plots")
@@ -1028,6 +947,11 @@ def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_
 
 
 def main():
+    """Main function to analyze experiment results and generate tables and plots.
+    
+    Parses command line arguments, loads CSV result files, and generates markdown tables
+    and visualization plots for the experiment results.
+    """
     parser = argparse.ArgumentParser(description='Analyze experiment results from CSV files')
     parser.add_argument('--results-dir', default=None, 
                        help='Directory containing CSV result files (default: script_dir/../results)')
@@ -1054,6 +978,11 @@ def main():
     
     # Parse allowed values for fixed and adaptive methods
     def parse_value_list(val):
+        """Parse a comma-separated string of values into a list of floats.
+        
+        :param val: comma-separated string of numeric values.
+        :return: list of float values, or None if input is empty or None.
+        """
         if val is None or val.strip() == '':
             return None
         return [float(x) for x in val.split(',') if x.strip() != '']
@@ -1076,6 +1005,11 @@ def main():
     
     # Filter grouped_data based on allowed values
     def config_is_allowed(config):
+        """Check if a configuration should be included based on allowed values.
+        
+        :param config: configuration dictionary containing method and value.
+        :return: True if configuration should be included, False otherwise.
+        """
         method = config.get('method', '')
         value = config.get('value', None)
         if method == 'fixed' and allowed_fixed_values is not None:
@@ -1103,8 +1037,8 @@ def main():
             output_dir=args.output_dir,
             adaptive_values=plot_adaptive_values,
             title=r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
-            in Simple Zero-Shot Environment""",
-        projection_point=1.0)
+            for the Complex Zero-Shot Environment""",
+        projection_point=3.1623)
     
     # Generate clustered-bar plots for unsafe TTC and unsafe distance
     print("Generating unsafe TTC bar plot...")
@@ -1146,14 +1080,11 @@ def main():
         header_cols = table_data['header_cols']
         rows = table_data['rows']
         configs = table_data.get('configs', [None] * len(rows))
-        
-        # Find the index of 'Collision Rate (hr⁻¹)' in the header
         try:
-            collision_idx = header_cols.index('Collision Rate (hr⁻¹)')
+            collision_idx = header_cols.index('Collision Rate (hr^-1)')
         except ValueError:
             collision_idx = 1
         
-        # Insert 'Success Rate (%)' before collision rate in header
         extended_header_cols = header_cols[:collision_idx] + ['Success Rate (%)'] + header_cols[collision_idx:]
         
         # Split rows into main and ablation

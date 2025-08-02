@@ -10,9 +10,9 @@ import torch
 from stable_baselines3 import DQN
 from highway_env.envs.highway_env import HighwayEnv
 
-from scps_supervisor.norms.constraints import SafetyEnvelopeConstraint
-from scps_supervisor.supervisor import Supervisor, PolicyAugmentMethod
+from scps_supervisor.supervisor import Supervisor
 import scps_supervisor.metrics as metrics
+from scps_supervisor.norms.norms import TailgatingNorm
 
 # Add the scripts directory to the path so we can import from test.py
 sys.path.append(os.path.dirname(__file__))
@@ -21,7 +21,14 @@ from test import CONFIGS, METHOD_MAPPING
 BASE_SEED = 239
 
 def debug_collision(profile, method, value, filter, episode_seed=0):
-    """Debug a single episode with visualization."""
+    """Debug a single episode with visualization.
+    
+    :param profile: driving profile to use (e.g., 'cautious', 'efficient').
+    :param method: supervisor method to use (e.g., 'nop', 'naive', 'adaptive', 'fixed').
+    :param value: value for adaptive/fixed methods (ignored for other methods).
+    :param filter: whether to enable supervisor filtering.
+    :param episode_seed: random seed for the episode to debug.
+    """
     
     # Load model and environment config
     model_path = os.path.join("models", CONFIGS['default']['model_file'])
@@ -100,7 +107,7 @@ def debug_collision(profile, method, value, filter, episode_seed=0):
         # Calculate TTC for debugging
         ttcs = metrics.calculate_neighbour_ttcs(env_unwrapped.vehicle)
         print(f"TTC front: {ttcs[0]:.3f}, TTC rear: {ttcs[1]:.3f}")
-        distance = SafetyEnvelopeConstraint.evaluate_criterion(env_unwrapped.vehicle)
+        distance = TailgatingNorm.evaluate_criterion(env_unwrapped.vehicle)
         print(f"Following distance: {distance:.3f}")
         
         # Take action
@@ -143,6 +150,7 @@ def debug_collision(profile, method, value, filter, episode_seed=0):
     env.close()
 
 def main():
+    """Main function to parse command line arguments and run collision debugging."""
     parser = argparse.ArgumentParser(description="Debug collision with visualization")
     parser.add_argument('--profile', choices=['cautious', 'efficient'], required=True,
                        help='Driving profile to use')

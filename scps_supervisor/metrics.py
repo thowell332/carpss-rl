@@ -94,6 +94,7 @@ def calculate_mean_under(
 
     :param sample_history: a list of samples
     :param threshold: the threshold for exposure
+    :return: the mean value of samples below the threshold, or np.nan if no samples are below the threshold
     """
     sample_history = np.asarray(sample_history, dtype=np.float64)
     if sample_history.ndim != 1:
@@ -112,6 +113,8 @@ def calculate_cv_under(
 
     :param sample_history: a list of samples
     :param threshold: the threshold for exposure
+    :return: the coefficient of variance (std/mean) of samples below the threshold, or np.nan if no
+        samples are below the threshold
     """
     sample_history = np.asarray(sample_history, dtype=np.float64)
     if sample_history.ndim != 1:

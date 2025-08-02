@@ -5,7 +5,12 @@ from highway_env.road.road import LaneIndex
 from highway_env.vehicle.controller import MDPVehicle
 
 def get_next_speed(vehicle: MDPVehicle, action: Action) -> float:
-    """Return the next speed of the vehicle based on the action."""
+    """Return the next speed of the vehicle based on the action.
+    
+    :param vehicle: the vehicle for which to predict the next speed.
+    :param action: the action to apply.
+    :return: the predicted next speed of the vehicle in m/s.
+    """
     # TODO: Determine if lane changes cause a speed increase
     if DiscreteMetaAction.ACTIONS_ALL[action] == "FASTER":
         speed_index_delta = 1
@@ -23,7 +28,12 @@ def get_next_speed(vehicle: MDPVehicle, action: Action) -> float:
     return target_speed
 
 def get_next_lane_index(vehicle: MDPVehicle, action: Action) -> LaneIndex:
-    """Return the next lane index of the vehicle based on the action."""
+    """Return the next lane index of the vehicle based on the action.
+    
+    :param vehicle: the vehicle for which to predict the next lane index.
+    :param action: the action to apply.
+    :return: the predicted next lane index as a tuple (from, to, lane_id).
+    """
     if DiscreteMetaAction.ACTIONS_ALL[action] not in ["LANE_LEFT", "LANE_RIGHT"]:
         return vehicle.target_lane_index
 

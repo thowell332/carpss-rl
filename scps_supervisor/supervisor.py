@@ -13,9 +13,9 @@ from highway_env.envs.common.action import DiscreteMetaAction
 from highway_env.envs.highway_env import HighwayEnv
 from stable_baselines3 import DQN
 
-from scps_supervisor.norms.profiles.abstract import AbstractNormProfile
-from scps_supervisor.norms.profiles.cautious import CautiousNormProfile
-from scps_supervisor.norms.profiles.efficient import EfficientNormProfile
+from scps_supervisor.profiles.abstract import AbstractNormProfile
+from scps_supervisor.profiles.cautious import CautiousNormProfile
+from scps_supervisor.profiles.efficient import EfficientNormProfile
 
 # Type alias for 1D array of floating points
 FloatArray1D = npt.NDArray[np.float64]
@@ -53,8 +53,8 @@ class Supervisor:
         """Initialize the supervisor with the environment and configuration.
 
         :param env: the unwrapped HighwayEnv environment.
-        :profile_name: the name of the norm profile to use for the supervisor.
-        :filter: whether to filter the model policy on hard constraints.
+        :param profile_name: the name of the norm profile to use for the supervisor.
+        :param filter: whether to filter the model policy on hard constraints.
         :param method: the method for policy augmentation ('fixed', 'adaptive', 'naive', 'nop').
         :param fixed_beta: fixed beta value for the supervisory policy.
             This value is only used for the FIXED method.
