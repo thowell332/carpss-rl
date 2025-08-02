@@ -1,4 +1,5 @@
 from enum import Enum
+import numpy as np
 
 from highway_env.envs.common.action import Action
 from highway_env.road.road import LaneIndex
@@ -6,10 +7,6 @@ from highway_env.vehicle.controller import MDPVehicle
 
 from scps_supervisor.consts import ACTION_STRINGS
 from scps_supervisor.norms.abstract import AbstractNorm
-from scps_supervisor.norms.constraints import (
-    SafetyEnvelopeConstraint,
-    LaneChangeSafetyEnvelopeConstraint
-)
 from scps_supervisor.norms.prediction import get_next_speed, get_next_lane_index
 import scps_supervisor.metrics as metrics
 
@@ -169,31 +166,106 @@ class LaneChangeBrakingNorm(BrakingNorm):
     def __str__(self):
         return "LaneChangeBrakingNorm"
 
-class TailgatingNorm(SafetyEnvelopeConstraint, AbstractNorm):
+class TailgatingNorm(AbstractNorm):
     """Norm constraint for enforcing a safe following distance."""
     def __init__(self, safe_distance: float, weight: int = 1):
-        """Initialize the tailgating norm with a weight and a safe distance.
+        """Initialize the tailgating norm with a safe distance and weight.
         
-        :param safe_distance: minimum safe following distance in meters.
+        :param safe_distance: minimum safe distance in meters.
         :param weight: the norm weight, used for prioritization.
         """
-        SafetyEnvelopeConstraint.__init__(self, safe_distance=safe_distance)
-        AbstractNorm.__init__(self, violating_actions=self.violating_actions, weight=weight)
+        super().__init__(
+            violating_actions=[
+                ACTION_STRINGS["FASTER"],
+                ACTION_STRINGS["IDLE"],
+                # If the lane change is disallowed, the action is effectively IDLE
+                ACTION_STRINGS["LANE_LEFT"],
+                ACTION_STRINGS["LANE_RIGHT"]
+            ],
+            weight=weight
+        )
+        self.safe_distance = safe_distance
+
+    @staticmethod
+    def evaluate_criterion(
+        vehicle: MDPVehicle,
+        lane_index: LaneIndex = None,
+        check_rear: bool = False
+    ) -> float:
+        """Return the distance to the vehicle ahead or behind.
+        
+        :param vehicle: the vehicle for which to evaluate the criterion.
+        :param lane_index: optional lane index to check (if None, uses vehicle's current lane).
+        :param check_rear: if True, check distance to following vehicle; if False, check distance to leading vehicle.
+        :return: the distance in meters, or np.inf if there is no vehicle in that direction.
+        """
+        v_front, v_rear = vehicle.road.neighbour_vehicles(vehicle, lane_index)
+        v_to_check = v_rear if check_rear else v_front
+        if v_to_check is not None:
+            return abs(v_to_check.position[0] - vehicle.position[0] - MDPVehicle.LENGTH)
+        return np.inf
+    
+    def is_violating_action(
+            self,
+            vehicle: MDPVehicle,
+            action: Action,
+            lane_index: LaneIndex = None,
+            check_rear: bool = False
+    ) -> bool:
+        """Check if the action violates the safe following distance.
+        
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :param lane_index: optional lane index to check (if None, uses vehicle's current lane).
+        :param check_rear: if True, check distance to following vehicle; if False, check distance to leading vehicle.
+        :return: True if the action violates the tailgating norm, False otherwise.
+        """
+        if action not in self.violating_actions:
+            return False
+        
+        # If the action results in a lane change, this norm is not violated
+        if get_next_lane_index(vehicle, action) != vehicle.target_lane_index:
+            return False
+        
+        distance = self.evaluate_criterion(vehicle, lane_index, check_rear)
+        return distance < self.safe_distance
         
     def __str__(self):
         return "TailgatingNorm"
-    
-class LaneChangeTailgatingNorm(LaneChangeSafetyEnvelopeConstraint, AbstractNorm):
+
+class LaneChangeTailgatingNorm(TailgatingNorm):
     """Norm constraint for enforcing a safe following distance during lane changes."""
     def __init__(self, safe_distance: float, weight: int = 1):
-        """Initialize the lane change tailgating norm with a weight and a safe distance.
+        """Initialize the lane change tailgating norm with a safe distance and weight.
         
-        :param safe_distance: minimum safe following distance in meters.
+        :param safe_distance: minimum safe distance in meters.
         :param weight: the norm weight, used for prioritization.
         """
-        SafetyEnvelopeConstraint.__init__(self, safe_distance=safe_distance)
-        AbstractNorm.__init__(self, violating_actions=self.violating_actions, weight=weight)
+        super().__init__(safe_distance=safe_distance, weight=weight)
+        self.violating_actions = [
+            ACTION_STRINGS["LANE_LEFT"],
+            ACTION_STRINGS["LANE_RIGHT"]
+        ]
+
+    def is_violating_action(self, vehicle: MDPVehicle, action: Action) -> bool:
+        """Check if the action violates the safe following distance for lane changes.
         
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :return: True if the action violates the lane change tailgating norm, False otherwise.
+        """
+        if action not in self.violating_actions:
+            return False
+        
+        # Return False if the action does not result in a lane change
+        next_lane_index = get_next_lane_index(vehicle, action)
+        if next_lane_index == vehicle.target_lane_index:
+            return False
+
+        distance_front = super().evaluate_criterion(vehicle, next_lane_index, False)
+        distance_rear = super().evaluate_criterion(vehicle, next_lane_index, True)
+        return distance_front < self.safe_distance or distance_rear < self.safe_distance
+
     def __str__(self):
         return "LaneChangeTailgatingNorm"
 

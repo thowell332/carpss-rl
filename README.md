@@ -69,6 +69,8 @@ Using the model trained in the previous step, or the pre-trained model included 
 ./run_experiments.sh # Runs the full suite of experiments in all three environments by default
 ```
 
+Note that this may take awhile, especially as the complexity of the environment increases.
+
 The results will be written as CSV files to the `results/` directory, with sub-directories for each environment.
 
 ### 3.3. Analyzing Results
