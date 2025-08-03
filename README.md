@@ -48,7 +48,7 @@ pip install .
 
 ## 3. Replication Instructions
 
-This section describes the full set of instructions required to replicate all of the results presented in our paper/
+This section describes the full set of instructions required to replicate all of the results presented in our paper.
 
 ### 3.1. Training Models
 
