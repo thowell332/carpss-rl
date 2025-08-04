@@ -18,8 +18,8 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({
     "text.usetex": True,
     "pgf.texsystem": "pdflatex",
-    "pgf.rcfonts": False,  # don't override LaTeX document fonts
-    "font.family": "serif",  # use whatever LaTeX is using (Times here)
+    "pgf.rcfonts": False,
+    "font.family": "serif",
     "text.latex.preamble": r"\usepackage{times}",
 })
 

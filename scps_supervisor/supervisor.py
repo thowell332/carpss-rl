@@ -374,9 +374,11 @@ class Supervisor:
             policy = self._filter_policy(policy)
         
         # Augment the policy based on the supervisor mode
-        if self.method == PolicyAugmentMethod.NAIVE:
+        if self.method == PolicyAugmentMethod.NOP:
+            pass
+        elif self.method == PolicyAugmentMethod.NAIVE:
             policy = self._augment_policy_naive(policy)
-        if self.method in [
+        elif self.method in [
             PolicyAugmentMethod.ADAPTIVE,
             PolicyAugmentMethod.FIXED,
             PolicyAugmentMethod.PROJECTION
