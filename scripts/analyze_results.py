@@ -70,31 +70,31 @@ def parse_configuration_from_filename(filename):
             value = float(parts[2])
         except ValueError:
             value = None
-    method = os.path.basename(os.path.dirname(filename))
-    if method.endswith('_filtered'):
-        method_base = method[:-9]
-        filtered = True
-    elif method.endswith('_unfiltered'):
-        method_base = method[:-11]
-        filtered = False
-    else:
-        method_base = method
-        filtered = False
+    method_dir = os.path.basename(os.path.dirname(filename))
+    # Method directory may carry a filtered/unfiltered suffix, e.g. adaptive_filtered.
+    method_base = method_dir
+    filter_status = None
+    if method_dir.endswith("_filtered"):
+        method_base = method_dir[: -len("_filtered")]
+        filter_status = "filtered"
+    elif method_dir.endswith("_unfiltered"):
+        method_base = method_dir[: -len("_unfiltered")]
+        filter_status = "unfiltered"
     profile = os.path.basename(os.path.dirname(os.path.dirname(filename)))
     return {
         'profile': profile,
         'method': method_base,
-        'filtered': filtered,
         'value': value,
         'model': model,
         'env': env,
         'mode': method_base if method_base in ['default', 'naive', 'nop'] else 'default',
+        'filter': filter_status,
         'filename': filename
     }
 
 
 def load_and_group_data(results_dir):
-    """Load all CSV files and group by configuration.
+    """Load all per-episode CSV files, aggregate, and group by configuration.
     
     :param results_dir: Directory containing result CSV files.
     :return: Dictionary mapping configuration tuples to lists of DataFrames.
@@ -104,6 +104,143 @@ def load_and_group_data(results_dir):
         print(f"No CSV files found in '{results_dir}'")
         return {}
     grouped_data = defaultdict(list)
+
+    def _aggregate_episode_level_df(df):
+        """Aggregate per-episode dataframe into per-experiment metrics.
+        
+        This produces a single-row dataframe with the columns expected by the
+        rest of the analysis code, including:
+        - num_episodes, mean_episode_length, total_collisions, mean_speed
+        - lane_i_preference from lane_i_time
+        - *_violation_rate from *_violation_count
+        - cost_rate, avoided_cost_rate from total_cost / total_avoided_cost
+        - unsafe_*_rate / unsafe_ttc_*_rate from *_count columns
+        """
+        # Basic aggregates
+        num_episodes = len(df)
+        policy_period = df['policy_freq'].iloc[0] if 'policy_freq' in df.columns else 1.0
+        # Treat episode_length as measured in the same units as policy_period
+        total_time = float((df['episode_length'] * policy_period).sum())
+        mean_episode_length = float(df['episode_length'].mean()) if num_episodes > 0 else np.nan
+        total_collisions = float(df['collision'].sum()) if 'collision' in df.columns else np.nan
+        mean_speed = float(df['mean_speed'].mean()) if 'mean_speed' in df.columns else np.nan
+
+        out = {
+            'num_episodes': num_episodes,
+            'mean_episode_length': mean_episode_length,
+            'total_collisions': total_collisions,
+            'mean_speed': mean_speed,
+        }
+
+        # Lane occupancy preferences: normalise lane_i_time by total time,
+        # and compute the mean/std of the normalised lane index across episodes.
+        lane_time_cols = [c for c in df.columns if c.startswith('lane_') and c.endswith('_time')]
+        if total_time > 0 and lane_time_cols:
+            lane_indices = [
+                int(col[len('lane_') : -len('_time')]) for col in lane_time_cols
+            ]
+            # Episode-aggregated lane preferences (for compatibility with prior code)
+            for col in lane_time_cols:
+                lane_idx = int(col[len('lane_') : -len('_time')])
+                pref_col = f'lane_{lane_idx}_preference'
+                lane_time = float(df[col].sum())
+                out[pref_col] = lane_time / total_time
+
+            # Per-episode normalised lane index values
+            max_idx = max(lane_indices) if lane_indices else 0
+            denom = max_idx if max_idx > 0 else 1  # avoid division by zero for single-lane cases
+            norm_lane_values = []
+            for _, row in df.iterrows():
+                ep_len = row.get('episode_length', 0.0)
+                ep_total_time = ep_len * policy_period
+                if ep_total_time <= 0:
+                    continue
+                ep_norm_lane = 0.0
+                for lane_idx in lane_indices:
+                    time_col = f'lane_{lane_idx}_time'
+                    lane_time_ep = float(row.get(time_col, 0.0))
+                    p_i = lane_time_ep / ep_total_time
+                    ep_norm_lane += (lane_idx / denom) * p_i
+                norm_lane_values.append(ep_norm_lane)
+
+            if norm_lane_values:
+                out['mean_normalized_lane_index'] = float(np.mean(norm_lane_values))
+                # Std over episodes (per configuration)
+                out['std_normalized_lane_index_episodes'] = float(np.std(norm_lane_values, ddof=1)) if len(norm_lane_values) > 1 else 0.0
+
+        # Violation rates (per second of simulated time)
+        violation_count_cols = [c for c in df.columns if c.endswith('_violation_count')]
+        if total_time > 0:
+            for col in violation_count_cols:
+                base = col[:-len('_violation_count')]
+                rate_col = f'{base}_violation_rate'
+                total_viol = float(df[col].sum())
+                out[rate_col] = total_viol / total_time
+
+        # Cost and avoided-cost rates, plus per-episode mean/std total cost
+        if 'total_cost' in df.columns:
+            if total_time > 0:
+                total_cost = float(df['total_cost'].sum())
+                out['cost_rate'] = total_cost / total_time
+            # Mean/std realised norm cost per episode
+            out['mean_total_cost'] = float(df['total_cost'].mean())
+            out['std_total_cost_episodes'] = float(df['total_cost'].std(ddof=1)) if num_episodes > 1 else 0.0
+        # Expected norm cost (per-episode means/stds)
+        if 'total_expected_cost' in df.columns:
+            out['mean_total_expected_cost'] = float(df['total_expected_cost'].mean())
+            out['std_total_expected_cost_episodes'] = float(df['total_expected_cost'].std(ddof=1)) if num_episodes > 1 else 0.0
+        if 'total_avoided_cost' in df.columns and total_time > 0:
+            total_avoided_cost = float(df['total_avoided_cost'].sum())
+            out['avoided_cost_rate'] = total_avoided_cost / total_time
+
+        # Reward, basic-reward and added-reward (per-episode means/stds)
+        # These are the per-episode aggregates across all episodes in an experiment.
+        if 'total_reward' in df.columns:
+            out['mean_total_reward'] = float(df['total_reward'].mean())
+        if 'total_basic_reward' in df.columns:
+            out['mean_basic_reward'] = float(df['total_basic_reward'].mean())
+            out['std_basic_reward_episodes'] = float(df['total_basic_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
+        if 'total_added_reward' in df.columns:
+            out['mean_added_reward'] = float(df['total_added_reward'].mean())
+            out['std_added_reward_episodes'] = float(df['total_added_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
+
+        # Unsafe action selection rates (distance-based)
+        if 'unsafe_frames' in df.columns:
+            unsafe_frames = float(df['unsafe_frames'].sum())
+            unsafe_cols = [c for c in df.columns if c.startswith('unsafe_') and c.endswith('_count')
+                           and not c.startswith('unsafe_ttc_')]
+            if unsafe_frames > 0:
+                for col in unsafe_cols:
+                    base = col[len('unsafe_') : -len('_count')]
+                    rate_col = f'unsafe_{base}_rate'
+                    total_cnt = float(df[col].sum())
+                    out[rate_col] = total_cnt / unsafe_frames
+
+        # Unsafe action selection rates (TTC-based)
+        if 'unsafe_ttc_frames' in df.columns:
+            unsafe_ttc_frames = float(df['unsafe_ttc_frames'].sum())
+            unsafe_ttc_cols = [c for c in df.columns
+                               if c.startswith('unsafe_ttc_') and c.endswith('_count')]
+            if unsafe_ttc_frames > 0:
+                for col in unsafe_ttc_cols:
+                    base = col[len('unsafe_ttc_') : -len('_count')]
+                    rate_col = f'unsafe_ttc_{base}_rate'
+                    total_cnt = float(df[col].sum())
+                    out[rate_col] = total_cnt / unsafe_ttc_frames
+
+        # Supervisor statistics: average convergence metrics, sum outcome counts
+        if 'mean_iterations_to_converge' in df.columns:
+            out['mean_iterations_to_converge'] = float(df['mean_iterations_to_converge'].mean())
+        if 'convergence_rate' in df.columns:
+            out['convergence_rate'] = float(df['convergence_rate'].mean())
+
+        outcome_cols = [c for c in df.columns
+                        if c.startswith('outcome_') and c.endswith('_count')]
+        for col in outcome_cols:
+            out[col] = float(df[col].sum())
+
+        # Return as single-row DataFrame for compatibility
+        return pd.DataFrame([out])
     for filename in csv_files:
         config = parse_configuration_from_filename(filename)
         if config is None:
@@ -112,10 +249,16 @@ def load_and_group_data(results_dir):
         filepath = os.path.join(results_dir, filename)
         try:
             df = pd.read_csv(filepath)
-            if not df.empty:
-                for key, value in config.items():
-                    df[key] = value
-                grouped_data[tuple(sorted(config.items()))].append(df)
+            if df.empty:
+                continue
+
+            # All result files are stored with per-episode rows; aggregate to a
+            # single per-experiment row for downstream analysis.
+            df_processed = _aggregate_episode_level_df(df)
+
+            for key, value in config.items():
+                df_processed[key] = value
+            grouped_data[tuple(sorted(config.items()))].append(df_processed)
         except Exception as e:
             print(f"Warning: Could not read {filename}: {e}")
     return grouped_data
@@ -128,7 +271,7 @@ def calculate_statistics(group_data):
     :return: Tuple of (stats dictionary, number of experiments).
     """
     combined_df = pd.concat(group_data, ignore_index=True)
-    config_cols = ['profile', 'method', 'value', 'model', 'env', 'mode']
+    config_cols = ['profile', 'method', 'value', 'model', 'env', 'mode', 'filter']
     numeric_cols = [col for col in combined_df.columns 
                    if col not in config_cols and combined_df[col].dtype in ['float64', 'int64']]
     stats = {}
@@ -140,20 +283,77 @@ def calculate_statistics(group_data):
             stats[col] = (mean_val, std_val)
         else:
             stats[col] = (np.nan, np.nan)
+
+    # Override selected metrics to use pooled std over episodes (rather than across experiments)
+    pooled_specs = [
+        ("mean_basic_reward", "std_basic_reward_episodes"),
+        ("mean_total_cost", "std_total_cost_episodes"),
+        ("mean_added_reward", "std_added_reward_episodes"),
+        ("mean_normalized_lane_index", "std_normalized_lane_index_episodes"),
+        ("mean_total_expected_cost", "std_total_expected_cost_episodes"),
+    ]
+    for mean_col, std_col in pooled_specs:
+        if mean_col in combined_df.columns and std_col in combined_df.columns and "num_episodes" in combined_df.columns:
+            means = combined_df[mean_col].to_numpy()
+            stds = combined_df[std_col].to_numpy()
+            counts = combined_df["num_episodes"].to_numpy()
+
+            mask = (~np.isnan(means)) & (~np.isnan(stds)) & (~np.isnan(counts)) & (counts > 0)
+            if not np.any(mask):
+                continue
+            means = means[mask]
+            stds = stds[mask]
+            counts = counts[mask]
+
+            N = counts.sum()
+            if N <= 1:
+                # Not enough total episodes; fall back to default stats
+                continue
+
+            # Pooled mean over episodes
+            pooled_mean = float((counts * means).sum() / N)
+
+            # Pooled variance over episodes:
+            # sum_j [ (n_j - 1)*s_j^2 + n_j*(μ_j - μ)^2 ] / (N - 1)
+            sq_terms = (counts - 1) * (stds ** 2) + counts * (means - pooled_mean) ** 2
+            pooled_var = float(sq_terms.sum() / (N - 1))
+            pooled_std = float(np.sqrt(pooled_var)) if pooled_var >= 0 else 0.0
+
+            stats[mean_col] = (pooled_mean, pooled_std)
+
     return stats, len(combined_df)
 
 
 def format_statistic(mean_val, std_val, n_experiments, metric_name=None):
-    """Format mean and standard error as 'mean ± SE'.
+    """Format mean and uncertainty as 'mean ± X'.
     
     :param mean_val: mean value to format.
     :param std_val: standard deviation value.
     :param n_experiments: number of experiments for standard error calculation.
     :param metric_name: optional metric name for additional context.
-    :return: formatted string showing mean ± standard error, or "-" if insufficient data.
+    :return: formatted string showing mean ± standard error, or just mean if only one experiment,
+             or "-" if no valid data.
     """
-    if pd.isna(mean_val) or pd.isna(std_val) or n_experiments <= 1:
+    if pd.isna(mean_val):
         return "-"
+
+    # Metrics where we always want mean ± std over episodes (if std is available),
+    # regardless of how many experiments contributed.
+    metrics_use_std = {
+        "mean_basic_reward",
+        "mean_total_cost",
+        "mean_added_reward",
+        "mean_normalized_lane_index",
+        "mean_total_expected_cost",
+    }
+    if metric_name in metrics_use_std and not pd.isna(std_val):
+        return f"{mean_val:.2f} ± {std_val:.2f}"
+
+    # For all other metrics: with only one experiment or no std, show just the mean.
+    if n_experiments <= 1 or pd.isna(std_val):
+        return f"{mean_val:.2f}"
+
+    # Default: mean ± standard error across experiments
     se_val = std_val / np.sqrt(n_experiments)
     return f"{mean_val:.2f} ± {se_val:.2f}"
 
@@ -228,11 +428,18 @@ def create_config_name(config_dict):
     :param config_dict: Configuration dictionary.
     :return: Concise label string.
     """
-    method = config_dict.get('method', '').title()
+    method = config_dict.get('method', '')
     value = config_dict.get('value')
+    filter_status = config_dict.get('filter')
+
+    base = method.title()
     if method.lower() in {'adaptive', 'fixed'} and value is not None:
-        return f"{method} ({value:g})"
-    return method
+        base = f"{base} ({value:g})"
+
+    if filter_status in {'filtered', 'unfiltered'}:
+        suffix = 'Filtered' if filter_status == 'filtered' else 'Unfiltered'
+        return f"{base} [{suffix}]"
+    return base
 
 
 def method_sort_key(config):
@@ -243,18 +450,21 @@ def method_sort_key(config):
     """
     method = config.get('method', '').lower()
     value = config.get('value', 0)
+    filter_status = config.get('filter')
+    # Unfiltered (or unspecified) first, then filtered
+    filter_ord = 0 if filter_status in (None, 'unfiltered') else 1
     if method == 'unsupervised':
-        return (0, 0, 0)
+        return (0, filter_ord, 0)
     elif method == 'filter_only':
-        return (1, 0, 0)
+        return (1, filter_ord, 0)
     elif method == 'naive':
-        return (2, 0, 0)
+        return (2, filter_ord, 0)
     elif method == 'adaptive':
-        return (3, 0, float(value) if value is not None else 0)
+        return (3, filter_ord, float(value) if value is not None else 0)
     elif method == 'fixed':
-        return (4, 0, float(value) if value is not None else 0)
+        return (4, filter_ord, float(value) if value is not None else 0)
     else:
-        return (99, 0, 0)
+        return (99, filter_ord, 0)
 
 
 def generate_markdown_tables(grouped_data):
@@ -265,7 +475,17 @@ def generate_markdown_tables(grouped_data):
     """
     
     summary_metric_categories = {
-        'Core Metrics': ['collision_rate', 'cost_rate', 'mean_speed']
+        # For the top-of-summary tables, focus on reward decomposition
+        # (mean reward per episode, not rates), realised/expected norm cost,
+        # and the average normalised lane index.
+        'Core Metrics': [
+            'mean_total_reward',
+            'mean_basic_reward',
+            'mean_added_reward',
+            'mean_total_cost',
+            'mean_total_expected_cost',
+            'mean_normalized_lane_index',
+        ]
     }
     
     details_metric_categories = {
@@ -275,16 +495,30 @@ def generate_markdown_tables(grouped_data):
             'lane_change_tailgating_violation_rate', 'lane_change_braking_violation_rate',
             'collision_violation_rate', 'lane_change_collision_violation_rate'
         ],
-        'Cost Metrics': ['cost_rate']
+        'Reward & Cost Metrics': [
+            'mean_total_reward', 'mean_basic_reward', 'mean_added_reward',
+            'mean_total_cost', 'mean_total_expected_cost', 'cost_rate'
+        ],
+        'Supervisor Statistics': [
+            'mean_iterations_to_converge', 'convergence_rate',
+            'outcome_unchanged_count', 'outcome_naively_augmented_count',
+            'outcome_scps_augmented_count', 'outcome_projection_count'
+        ]
     }
     
     display_names = {
         # Summary metrics
-        'mean_episode_length'    : 'Episode Length (s)',
-        'collision_rate'         : 'Collision Rate (hr^-1)',
-        'mean_speed'             : 'Speed (m/s)',
-        'cost_rate'              : 'Cost Rate (hr^-1)',
-        'avoided_cost_rate'      : 'Avoided Cost Rate (hr^-1)',
+        'mean_episode_length'    : 'Episode Length',
+        'collision_rate'         : 'Collision Rate',
+        'mean_speed'                 : 'Speed',
+        'cost_rate'                  : 'Cost Rate',
+        'mean_total_cost'            : 'Total Norm Cost',
+        'mean_total_expected_cost'   : 'Expected Norm Cost',
+        'mean_normalized_lane_index' : 'Normalised Lane Index',
+        'avoided_cost_rate'      : 'Avoided Cost Rate',
+        'mean_total_reward'      : 'Total Reward',
+        'mean_basic_reward'      : 'Basic Reward',
+        'mean_added_reward'      : 'Added Reward',
         
         # Details metrics
         'speed_violation_rate'                 : 'Speed Violations (hr^-1)',
@@ -295,6 +529,14 @@ def generate_markdown_tables(grouped_data):
         'lane_change_braking_violation_rate'   : 'Lane Change Braking Violations (hr^-1)',
         'collision_violation_rate'             : 'Collision Violations (hr^-1)',
         'lane_change_collision_violation_rate' : 'Lane Change Collision Violations (hr^-1)',
+        
+        # Supervisor statistics
+        'mean_iterations_to_converge'          : 'Mean Iterations to Converge',
+        'convergence_rate'                     : 'Convergence Rate',
+        'outcome_unchanged_count'              : 'Unchanged Count',
+        'outcome_naively_augmented_count'      : 'Naively Augmented Count',
+        'outcome_scps_augmented_count'         : 'SCPS Augmented Count',
+        'outcome_projection_count'             : 'Projection Count',
     }
     # Build header rows
     summary_header_cols = ['Method']
@@ -354,14 +596,11 @@ def generate_markdown_tables(grouped_data):
                 for category, metrics in summary_metric_categories.items():
                     for metric in metrics:
                         if metric == 'collision_rate':
+                            # Keep existing collision-rate formatting (per hour)
                             summary_row.append(format_collision_rate(group_data))
-
-
                         elif metric in stats:
                             mean_val, std_val = stats[metric]
-                            if metric in ['cost_rate']:
-                                mean_val *= 3600
-                                std_val *= 3600
+                            # For all other metrics, report raw means/stds (no per-hour scaling)
                             summary_row.append(format_statistic(mean_val, std_val, n_experiments, metric))
                         else:
                             summary_row.append("-")
@@ -374,9 +613,7 @@ def generate_markdown_tables(grouped_data):
                     for metric in metrics:
                         if metric in stats:
                             mean_val, std_val = stats[metric]
-                            if 'violation_rate' in metric or 'cost_rate' in metric:
-                                mean_val *= 3600
-                                std_val *= 3600
+                            # Report raw means/stds for all metrics (no per-hour conversion)
                             details_row.append(format_statistic(mean_val, std_val, n_experiments, metric))
                         else:
                             details_row.append("-")
@@ -401,7 +638,14 @@ def generate_markdown_tables(grouped_data):
 
 
 def generate_summary_table(grouped_data):
-    """Generate a summary table showing experiment counts and total episodes for each configuration."""
+    """Generate a summary table for each configuration.
+    
+    The main summary focuses on success rate and reward-based metrics:
+    - Success rate (% of episodes without collision)
+    - Mean total reward (aggregated across experiments)
+    - Mean basic reward
+    - Mean added reward
+    """
     summary_rows = []
     seen_keys = set()
     
@@ -409,42 +653,53 @@ def generate_summary_table(grouped_data):
     all_configs = []
     for config_tuple, group_data in grouped_data.items():
         config_dict = dict(config_tuple)
-        key = (config_dict['profile'], config_dict['model'], config_dict['env'], 
-               config_dict['method'], config_dict['value'], config_dict['filtered'])
+        key = (
+            config_dict['profile'],
+            config_dict['model'],
+            config_dict['env'],
+            config_dict['method'],
+            config_dict['value'],
+            config_dict.get('filter'),
+        )
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        # Only include in summary if it's a main result (not ablation)
-        if config_dict['method'] in ['unsupervised', 'filter_only', 'nop'] or config_dict['filtered'] == True:
-            all_configs.append(config_dict)
+        # With filter status removed, treat all configurations as main results.
+        all_configs.append(config_dict)
     
     # Sort configurations
-    all_configs.sort(key=lambda x: (x['profile'], x['model'], x['env'], x['method'], x['value'] or 0))
+    all_configs.sort(key=lambda x: (x['profile'], x['model'], x['env'], x['method'], x.get('filter') or '', x['value'] or 0))
     
     for config in all_configs:
         config_tuple = tuple(sorted(config.items()))
         if config_tuple in grouped_data:
             group_data = grouped_data[config_tuple]
             stats, n_experiments = calculate_statistics(group_data)
-            
-            # Calculate total episodes
-            total_episodes = 0
-            for df in group_data:
-                if 'num_episodes' in df.columns:
-                    total_episodes += df['num_episodes'].sum()
-            
-            # Calculate success rate
+
+            # Success rate (% of episodes without collision)
             success_rate = compute_success_rate(group_data)
             method_name = create_config_name(config)
-            
-            # Create row
+
+            # Reward-based metrics: use aggregated per-episode means/stds directly
+            def _format_rate(metric_name):
+                if metric_name not in stats:
+                    return "-"
+                mean_val, std_val = stats[metric_name]
+                return format_statistic(mean_val, std_val, n_experiments, metric_name)
+
+            total_reward_str = _format_rate('mean_total_reward')
+            basic_reward_str = _format_rate('mean_basic_reward')
+            added_reward_str = _format_rate('mean_added_reward')
+
+            # Create row: Profile, Model-Env, Method, Success Rate, Reward, Basic, Added
             row = [
                 config['profile'].title(),
                 f"{config['model']} {config['env']}",
                 method_name,
-                str(n_experiments),
-                str(total_episodes),
-                success_rate
+                success_rate,
+                total_reward_str,
+                basic_reward_str,
+                added_reward_str,
             ]
             summary_rows.append(row)
     
@@ -471,7 +726,8 @@ def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, titl
     model_env_profile_groups = defaultdict(lambda: defaultdict(dict))
     for config_tuple, group_data in grouped_data.items():
         config_dict = dict(config_tuple)
-        if config_dict['method'] != 'adaptive' or not config_dict['filtered']:
+        # Only consider adaptive configurations; ignore any historical filtered/unfiltered status.
+        if config_dict['method'] != 'adaptive':
             continue
         
         model_env_key = (config_dict['model'], config_dict['env'])
@@ -654,15 +910,19 @@ def generate_clustered_bar_plot(
         cfg = dict(config_tuple)
         key = (cfg["model"], cfg["env"])
 
+        # Only consider filtered configurations for supervised runs; use unfiltered/unspecified
+        # for the unsupervised baseline.
+        filter_status = cfg.get("filter")
+
         # Unsupervised baseline (profile agnostic)
-        if cfg.get("method") == "unsupervised":
+        if cfg.get("method") == "unsupervised" and filter_status in (None, "unfiltered"):
             groups_by_model_env[key]["unsupervised"].extend(group_data)
 
-        # Adaptive beta (delta = selected_value), filtered
+        # Adaptive beta (delta = selected_value), filtered runs only
         elif (
             cfg.get("method") == "adaptive"
-            and cfg.get("filtered", False)
             and abs(float(cfg.get("value", 0)) - float(selected_value)) < 1e-6
+            and filter_status == "filtered"
         ):
             if cfg.get("profile") == "cautious":
                 groups_by_model_env[key]["cautious_adaptive"].extend(group_data)
@@ -829,13 +1089,14 @@ def generate_lane_occupancy_stacked_bar_plot(grouped_data, output_dir, selected_
     for cfg_tuple, gdata in grouped_data.items():
         cfg = dict(cfg_tuple)
         key = (cfg["model"], cfg["env"])
+        filter_status = cfg.get("filter")
 
-        if cfg.get("method") == "unsupervised":
+        if cfg.get("method") == "unsupervised" and filter_status in (None, "unfiltered"):
             groups_by_model_env[key]["unsupervised"].extend(gdata)
         elif (
             cfg.get("method") == "adaptive"
-            and cfg.get("filtered", False)
             and abs(float(cfg.get("value", 0)) - float(selected_value)) < 1e-6
+            and filter_status == "filtered"
         ):
             if cfg.get("profile") == "cautious":
                 groups_by_model_env[key]["cautious_adaptive"].extend(gdata)
@@ -957,10 +1218,22 @@ def main():
                        help='Directory containing CSV result files')
     parser.add_argument('--output-dir', required=True,
                        help='Output directory for analysis files')
-    parser.add_argument('--fixed-values', default='0.01, 0.10, 1.00',
-                       help='Comma-separated list of values to include for fixed method (e.g., 0.01,0.10,1.0)')
-    parser.add_argument('--adaptive-values', default='0.01, 0.10, 1.00',
-                       help='Comma-separated list of values to include for adaptive method (e.g., 0.01,0.10,1.0)')
+    parser.add_argument(
+        '--fixed-values',
+        default='',
+        help=(
+            'Comma-separated list of values to include for fixed method (e.g., 0.01,0.05,0.10). '
+            'If omitted or empty, include all fixed-method runs.'
+        ),
+    )
+    parser.add_argument(
+        '--adaptive-values',
+        default='',
+        help=(
+            'Comma-separated list of values to include for adaptive method (e.g., 0.01,0.05,0.10). '
+            'If omitted or empty, include all adaptive-method runs.'
+        ),
+    )
     parser.add_argument('--plots', action='store_true',
                        help='Generate visualization plots (default: False)')
     parser.add_argument('--plot-adaptive-values', default='0.01, 0.0316, 0.10, 0.3162, 1.00, 3.1623, 10.000',
@@ -1082,87 +1355,88 @@ def main():
         
         extended_header_cols = header_cols[:collision_idx] + ['Success Rate (%)'] + header_cols[collision_idx:]
         
-        # Split rows into main and ablation
+        # Build main rows and success rates; keep filtered and unfiltered configurations separate.
         main_rows = []
-        ablation_rows = []
         seen_main_methods = set()
-        
+
         for row, config in zip(rows, configs):
             if config is None:
                 main_rows.append(row[:collision_idx] + [''] + row[collision_idx:])
-                ablation_rows.append(row[:collision_idx] + [''] + row[collision_idx:])
                 continue
-            
-            method_key = (config['profile'], config['method'], config.get('value', None))
+
+            method_key = (
+                config['profile'],
+                config['method'],
+                config.get('value', None),
+                config.get('filter', None),
+            )
             config_tuple = tuple(sorted(config.items()))
             group_data = filtered_grouped_data.get(config_tuple, None)
             success_rate = compute_success_rate(group_data) if group_data is not None else "-"
             new_row = row[:collision_idx] + [success_rate] + row[collision_idx:]
-            
-            if config['method'] in ['unsupervised', 'filter_only', 'nop']:
-                if method_key not in seen_main_methods:
-                    main_rows.append(new_row)
-                    seen_main_methods.add(method_key)
-            elif config['filtered'] == False:
-                ablation_rows.append(new_row)
-            else:
-                if method_key not in seen_main_methods:
-                    main_rows.append(new_row)
-                    seen_main_methods.add(method_key)
+
+            if method_key not in seen_main_methods:
+                main_rows.append(new_row)
+                seen_main_methods.add(method_key)
         
         with open(summary_file, 'a') as f:
             f.write(f"\n## {model} {env} Results\n\n")
             write_table_section(f, "Main Experimental Results", extended_header_cols, main_rows)
-            if any(cell for row in ablation_rows for cell in row if cell and not cell[0:2] == '**'):
-                write_table_section(f, "Ablation Studies", extended_header_cols, ablation_rows)
     
-    # Write summary table
+    # Write summary table (main summary: number of episodes per experiment)
     with open(summary_file, 'a') as f:
         f.write("\n## Experiment Summary\n\n")
         f.write("| Profile | Model-Environment | Method | Experiments | Total Episodes |\n")
         f.write("|---------|-------------------|--------|-------------|----------------|\n")
-        for row in summary_rows:
-            f.write("| " + " | ".join(row[:5]) + " |\n")
 
-    # Write ablation studies table
-    ablation_configs = []
-    for config_tuple, group_data in filtered_grouped_data.items():
-        config_dict = dict(config_tuple)
-        if config_dict.get('method', 'nop') not in ['unsupervised', 'filter_only', 'nop'] and not config_dict.get('filtered', True):
-            ablation_configs.append(config_dict)
-    
-    ablation_configs.sort(key=lambda x: (x['profile'], x['model'], x['env'], x['method'], x['value'] or 0))
-    
-    if ablation_configs:
-        with open(summary_file, 'a') as f:
-            f.write("\n## Ablation Studies\n\n")
-            f.write("| Profile | Model-Environment | Method | Experiments | Total Episodes |\n")
-            f.write("|---------|-------------------|--------|-------------|----------------|\n")
-            for config in ablation_configs[::-1]:
-                config_tuple = tuple(sorted(config.items()))
-                if config_tuple in filtered_grouped_data:
-                    group_data = filtered_grouped_data[config_tuple]
-                    stats, n_experiments = calculate_statistics(group_data)
-                    
-                    total_episodes = 0
-                    for df in group_data:
-                        if 'num_episodes' in df.columns:
-                            total_episodes += df['num_episodes'].sum()
-                    
-                    method_name = create_config_name(config)
-                    row = [
-                        config['profile'].title(),
-                        f"{config['model']} {config['env']}",
-                        method_name,
-                        str(n_experiments),
-                        str(total_episodes)
-                    ]
-                    f.write("| " + " | ".join(row) + " |\n")
-    
+        # Reconstruct the set of configurations (same criteria as in generate_summary_table)
+        seen_keys = set()
+        episode_configs = []
+        for config_tuple, group_data in filtered_grouped_data.items():
+            config_dict = dict(config_tuple)
+            key = (
+                config_dict.get('profile'),
+                config_dict.get('model'),
+                config_dict.get('env'),
+                config_dict.get('method'),
+                config_dict.get('value'),
+                config_dict.get('filter'),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            episode_configs.append(config_dict)
+
+        # Sort configurations for stable, readable output
+        episode_configs.sort(key=lambda x: (x['profile'], x['model'], x['env'], x['method'], x.get('filter') or '', x['value'] or 0))
+
+        for config in episode_configs:
+            config_tuple = tuple(sorted(config.items()))
+            if config_tuple not in filtered_grouped_data:
+                continue
+            group_data = filtered_grouped_data[config_tuple]
+            stats, n_experiments = calculate_statistics(group_data)
+
+            # Calculate total episodes across experiments for this configuration
+            total_episodes = 0
+            for df in group_data:
+                if 'num_episodes' in df.columns:
+                    total_episodes += df['num_episodes'].sum()
+
+            method_name = create_config_name(config)
+            row = [
+                config['profile'].title(),
+                f"{config['model']} {config['env']}",
+                method_name,
+                str(n_experiments),
+                str(int(total_episodes)),
+            ]
+            f.write("| " + " | ".join(row) + " |\n")
+
     # Write details.md
     details_file = os.path.join(args.output_dir, 'details.md')
     with open(details_file, 'w') as f:
-        f.write("# Norm Violation Details\n")
+        f.write("# Detailed Experimental Metrics\n")
     
     # Write each details table
     for table_data in details_tables:
@@ -1171,38 +1445,36 @@ def main():
         header_cols = table_data['header_cols']
         rows = table_data['rows']
         configs = table_data.get('configs', [None] * len(rows))
-        
-        # Split rows into main and ablation
+
+        # Treat filtered and unfiltered configurations as separate main results.
         main_rows = []
-        ablation_rows = []
         seen_main_methods = set()
-        
+
         for row, config in zip(rows, configs):
             if config is None:
                 main_rows.append(row)
-                ablation_rows.append(row)
                 continue
-            
-            method_key = (config['profile'], config['method'], config.get('value', None))
-            
-            if config['method'] in ['unsupervised', 'filter_only', 'nop']:
-                if method_key not in seen_main_methods:
-                    main_rows.append(row)
-                    seen_main_methods.add(method_key)
-            elif config['filtered'] == False:
-                ablation_rows.append(row)
-            else:
-                if method_key not in seen_main_methods:
-                    main_rows.append(row)
-                    seen_main_methods.add(method_key)
-        
+
+            method_key = (
+                config['profile'],
+                config['method'],
+                config.get('value', None),
+                config.get('filter', None),
+            )
+
+            if method_key not in seen_main_methods:
+                main_rows.append(row)
+                seen_main_methods.add(method_key)
+
         with open(details_file, 'a') as f:
-            f.write(f"\n## {model} {env} Violation Rates\n\n")
+            f.write(f"\n## {model} {env} Detailed Metrics\n\n")
             f.write("For each metric, the mean and standard error between experiments are given in "
                     "the format \"mean ± SE\". \n\n")
+            f.write("**Supervisor Statistics:**\n")
+            f.write("- Mean Iterations to Converge: Average number of iterations for the root-finding algorithm to converge\n")
+            f.write("- Convergence Rate: Fraction of root-finding attempts that successfully converged\n")
+            f.write("- Outcome Counts: Number of times each policy augmentation outcome occurred\n\n")
             write_table_section(f, "Main Experimental Results", header_cols, main_rows)
-            if any(cell for row in ablation_rows for cell in row if cell and not cell.startswith('**')):
-                write_table_section(f, "Ablation Studies", header_cols, ablation_rows)
     
     print(f"Analysis complete! Results written to:")
     print(f"  Summary: {summary_file}")

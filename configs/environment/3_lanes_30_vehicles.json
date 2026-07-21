@@ -1,0 +1,18 @@
+{
+  "simulation_frequency": 5,
+  "lanes_count": 3,
+  "vehicles_count": 30,
+  "duration": 40,
+  "ego_spacing": 1.5,
+  "collision_reward": 0.0,
+  "right_lane_reward": 0.5,
+  "high_speed_reward": 0.0,
+  "lane_change_reward": 0,
+  "screen_width": 600,
+  "screen_height": 150,
+  "centering_position": [0.3, 0.5],
+  "scaling": 5.5,
+  "show_trajectories": false,
+  "render_agent": false,
+  "offscreen_rendering": true
+}
