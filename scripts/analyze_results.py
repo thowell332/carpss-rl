@@ -12,16 +12,29 @@ from collections import defaultdict
 import argparse
 
 import matplotlib
-matplotlib.use('pgf')  # Use pgf backend to render text in LaTeX
-import matplotlib.pyplot as plt
 
-plt.rcParams.update({
-    "text.usetex": True,
-    "pgf.texsystem": "pdflatex",
-    "pgf.rcfonts": False,
-    "font.family": "serif",
-    "text.latex.preamble": r"\usepackage{times}",
-})
+
+def _configure_plotting_backend(use_latex_pgf: bool = False) -> None:
+    """Configure Matplotlib. Use Agg for table-only runs; pgf/LaTeX only when plotting."""
+    if use_latex_pgf:
+        matplotlib.use("pgf")
+        import matplotlib.pyplot as plt
+
+        plt.rcParams.update({
+            "text.usetex": True,
+            "pgf.texsystem": "pdflatex",
+            "pgf.rcfonts": False,
+            "font.family": "serif",
+            "text.latex.preamble": r"\usepackage{times}",
+        })
+        return
+
+    matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
+
+
+# Default to a headless non-LaTeX backend so Colab / table-only analysis works.
+_configure_plotting_backend(use_latex_pgf=False)
+import matplotlib.pyplot as plt
 
 colors = {
     "gray": "#949494",
@@ -1297,6 +1310,14 @@ def main():
     
     # Generate plots only if --plots flag is set
     if args.plots:
+        # LaTeX text rendering for publication plots. Requires a local TeX install.
+        plt.rcParams.update({
+            "text.usetex": True,
+            "pgf.texsystem": "pdflatex",
+            "pgf.rcfonts": False,
+            "font.family": "serif",
+            "text.latex.preamble": r"\usepackage{times}",
+        })
         # Generate adaptive trends plot
         if plot_adaptive_values:
             print("Generating adaptive trends plot...")

@@ -154,7 +154,19 @@ class ExperimentRunner:
         print(f"Loading environment config from {env_config_path}...")
         with open(env_config_path, 'r') as f:
             return json.load(f)
-    
+
+    def _load_basic_reward_config(self) -> dict:
+        """Load RQL highway_basic training reward coeffs for metric logging."""
+        basic_reward_path = os.path.join("configs/environment", "basic_reward.json")
+        print(f"Loading basic reward config from {basic_reward_path}...")
+        with open(basic_reward_path, "r") as handle:
+            config = json.load(handle)
+        return {
+            key: value
+            for key, value in config.items()
+            if not str(key).startswith("_")
+        }
+
     def _create_supervisor(self, env: HighwayEnv) -> AbstractSupervisor:
         """Create discrete supervisor with appropriate configuration."""
         fixed_beta = self.config.value if self.config.method == 'fixed' else None
@@ -197,9 +209,11 @@ class ExperimentRunner:
         # Create supervisor
         supervisor = self._create_supervisor(env_unwrapped)
         
-        # Extract reward configuration from environment config
-        collision_reward = self.env_config.get('collision_reward', -1)
-        reward_speed_range = self.env_config.get('reward_speed_range', [20, 30])
+        # Basic reward uses RQL highway_basic / HighwayEnvMEBasic training coeffs,
+        # not the experiment env JSON (which often zeros collision/speed for add-on envs).
+        basic_reward_config = self._load_basic_reward_config()
+        collision_reward = basic_reward_config.get("collision_reward", -0.5)
+        reward_speed_range = basic_reward_config.get("reward_speed_range", [20, 30])
         
         # Run episodes
         policy_period = self.config.model_env.get('policy_freq', 1)
@@ -218,7 +232,8 @@ class ExperimentRunner:
                 self.lane_count,
                 collision_reward=collision_reward,
                 reward_speed_range=reward_speed_range,
-                env_config=self.env_config
+                env_config=self.env_config,
+                basic_reward_config=basic_reward_config,
             )
             episode_metrics.supervisor_start_idx = supervisor_start_idx
             episode_metrics.supervisor_outcome_start_idx = supervisor_outcome_start_idx

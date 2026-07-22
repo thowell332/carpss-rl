@@ -1,0 +1,8 @@
+{
+  "_comment": "Matches RQL-Comparison HighwayEnvMEBasic / train_rl highway_basic training defaults (highway-ME-basic-v0). Keep in sync with RQL-Comparison/configs/HighwayEnv/basic_reward.json. Use only for the basic reward component; right-lane add-on comes from the experiment env config.",
+  "collision_reward": -0.5,
+  "high_speed_reward": 0.4,
+  "right_lane_reward": 0.0,
+  "base_reward": 1.0,
+  "reward_speed_range": [20, 30]
+}

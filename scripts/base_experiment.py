@@ -23,7 +23,7 @@ import os
 
 def lmap(v: float, x: tuple[float, float], y: tuple[float, float]) -> float:
     """Linear map of value ``v`` with input range ``x`` to desired range ``y``."""
-    return y[0] + (v - x[0]) * (y[1] - x[0]) / (x[1] - x[0])
+    return y[0] + (v - x[0]) * (y[1] - y[0]) / (x[1] - x[0])
 
 BASE_SEED = 42
 
@@ -45,6 +45,7 @@ class EpisodeMetrics:
         collision_reward: float,
         reward_speed_range: list[float],
         env_config: dict | None = None,
+        basic_reward_config: dict | None = None,
     ):
         self.episode_length = 0
         self.collision = False
@@ -58,13 +59,35 @@ class EpisodeMetrics:
         self.cumulative_basic_reward: float = 0.0  # Basic reward component
         self.cumulative_added_reward: float = 0.0  # Added reward component
 
-        # Reward configuration from environment config
+        # Reward configuration from environment config (used for add-on / fallback)
         self.env_config: dict[str, Any] = env_config or {}
-        self.collision_reward: float = collision_reward
-        self.right_lane_reward: float = self.env_config.get("right_lane_reward", 0.0)
-        self.high_speed_reward: float = self.env_config.get("high_speed_reward", 0.0)
-        self.reward_speed_min: float = reward_speed_range[0]
-        self.reward_speed_max: float = reward_speed_range[1]
+        # When set, basic reward always uses these training-aligned coeffs
+        # (RQL-Comparison HighwayEnvMEBasic / highway_basic), independent of env_config.
+        self.basic_reward_config: dict[str, Any] | None = (
+            dict(basic_reward_config) if basic_reward_config is not None else None
+        )
+        if self.basic_reward_config is not None:
+            self.collision_reward = float(
+                self.basic_reward_config.get("collision_reward", collision_reward)
+            )
+            self.high_speed_reward = float(
+                self.basic_reward_config.get("high_speed_reward", 0.4)
+            )
+            self.base_reward = float(self.basic_reward_config.get("base_reward", 1.0))
+            speed_range = self.basic_reward_config.get(
+                "reward_speed_range", reward_speed_range
+            )
+        else:
+            self.collision_reward = collision_reward
+            self.high_speed_reward = float(self.env_config.get("high_speed_reward", 0.0))
+            self.base_reward = 1.0
+            speed_range = reward_speed_range
+
+        self.right_lane_reward: float = float(
+            self.env_config.get("right_lane_reward", 0.0)
+        )
+        self.reward_speed_min: float = speed_range[0]
+        self.reward_speed_max: float = speed_range[1]
         self.reward_speed_range: tuple[float, float] = (
             self.reward_speed_min,
             self.reward_speed_max,
@@ -109,34 +132,44 @@ class EpisodeMetrics:
         else:
             scaled_speed = 1.0 if forward_speed >= self.reward_speed_range[0] else 0.0
 
-        # Compute reward components using environment if available, otherwise manually
-        basic_reward = None
-        added_reward = None
-
-        if env_unwrapped is not None:
-            try:
-                # If environment exposes basic_reward and added_reward (ALL variant), use them
-                basic_reward = env_unwrapped.basic_reward
-                added_reward = env_unwrapped.added_reward
-            except AttributeError:
-                # Environment doesn't expose these attributes (non-ALL variant)
-                pass
-
-        if basic_reward is None or added_reward is None:
-            # Compute manually (matching HighwayEnvMEAddRightRewardALL formula)
-            # basic_reward = collision + speed + 1 (base reward)
+        # Training-aligned basic reward (preferred when basic_reward_config is set).
+        # Do not trust env.basic_reward here: experiment env configs often zero out
+        # collision/speed coeffs that the RQL base model was trained with.
+        # Compute both components from the provided vehicle state (same timestep).
+        if self.basic_reward_config is not None:
             basic_reward = (
                 self.collision_reward * (1.0 if crashed else 0.0)
-                + self.high_speed_reward * float(np.clip(scaled_speed, 0.0, 1.0))
-                + 1.0  # Base reward (always included in ALL variant basic_reward)
+                + self.high_speed_reward * scaled_speed
+                + self.base_reward
             )
-            if not on_road:
-                basic_reward = 0.0
-
-            # Added reward: right lane component
             added_reward = self.right_lane_reward * lane_normalized
             if not on_road:
+                basic_reward = 0.0
                 added_reward = 0.0
+        else:
+            # Legacy path (e.g. parking): prefer env-exposed split when available.
+            basic_reward = None
+            added_reward = None
+
+            if env_unwrapped is not None:
+                try:
+                    basic_reward = env_unwrapped.basic_reward
+                    added_reward = env_unwrapped.added_reward
+                except AttributeError:
+                    pass
+
+            if basic_reward is None or added_reward is None:
+                basic_reward = (
+                    self.collision_reward * (1.0 if crashed else 0.0)
+                    + self.high_speed_reward * scaled_speed
+                    + self.base_reward
+                )
+                if not on_road:
+                    basic_reward = 0.0
+
+                added_reward = self.right_lane_reward * lane_normalized
+                if not on_road:
+                    added_reward = 0.0
 
         # Total reward: basic + added
         timestep_reward = basic_reward + added_reward
