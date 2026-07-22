@@ -18,7 +18,7 @@ from supervisor.norms.norms import TailgatingNorm
 sys.path.append(os.path.dirname(__file__))
 from test import CONFIGS, METHOD_MAPPING
 
-BASE_SEED = 239
+BASE_SEED = 42
 
 def debug_collision(profile, method, value, filter, episode_seed=0):
     """Debug a single episode with visualization.

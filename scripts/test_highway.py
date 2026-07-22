@@ -89,6 +89,7 @@ class ExperimentConfig:
         self.filter = args.filter
         self.num_episodes = args.episodes
         self.output_file = args.output
+        self.seed = args.seed
         self.model_env = CONFIGS[self.env]
         
         # Validate configuration
@@ -136,7 +137,7 @@ class ExperimentRunner:
             try:
                 model = DQN_ME.load(model_path, device=device)
                 print("Loaded model as DQN_ME")
-                model.set_random_seed(BASE_SEED)
+                model.set_random_seed(self.config.seed)
                 return model
             except Exception as e:
                 print(f"Could not load as DQN_ME, trying DQN... ({e})")
@@ -144,7 +145,7 @@ class ExperimentRunner:
         # Fall back to standard DQN
         model = DQN.load(model_path, device=device)
         print("Loaded model as DQN")
-        model.set_random_seed(BASE_SEED)
+        model.set_random_seed(self.config.seed)
         return model
     
     def _load_env_config(self) -> dict:
@@ -180,6 +181,7 @@ class ExperimentRunner:
         print(f"  Model: {self.config.model_env['model_file']}")
         print(f"  Environment: {self.config.model_env['env_config']}")
         print(f"  Episodes: {self.config.num_episodes}")
+        print(f"  Base seed: {self.config.seed}")
         print(f"  Output: {self.config.output_file}")
         
         # Create environment using custom HighwayEnvMEAddRightReward
@@ -202,7 +204,7 @@ class ExperimentRunner:
         # Run episodes
         policy_period = self.config.model_env.get('policy_freq', 1)
         for episode in range(self.config.num_episodes):
-            ep_seed = episode_seed(BASE_SEED, episode)
+            ep_seed = episode_seed(self.config.seed, episode)
             
             obs, _ = env.reset(seed=ep_seed)
             supervisor.reset_norms()
@@ -359,6 +361,12 @@ def parse_arguments():
                        help='Value for adaptive/fixed methods (required for adaptive/fixed methods)')
     parser.add_argument('--episodes', type=int, default=1000,
                        help='Number of episodes to run')
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=BASE_SEED,
+        help=f'Base random seed (default {BASE_SEED}). Episode i uses seed + i.',
+    )
     parser.add_argument('--output', required=True,
                        help='Output CSV file path')
     args = parser.parse_args()

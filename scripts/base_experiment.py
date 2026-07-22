@@ -25,7 +25,7 @@ def lmap(v: float, x: tuple[float, float], y: tuple[float, float]) -> float:
     """Linear map of value ``v`` with input range ``x`` to desired range ``y``."""
     return y[0] + (v - x[0]) * (y[1] - x[0]) / (x[1] - x[0])
 
-BASE_SEED = 239
+BASE_SEED = 42
 
 
 def episode_seed(base_seed: int, episode: int) -> int:
