@@ -8,7 +8,7 @@ from highway_env.vehicle.kinematics import Vehicle
 from highway_env.vehicle.objects import Landmark
 
 from supervisor.norms.abstract import AbstractNorm
-from supervisor.norms.prediction import get_next_lane_index
+from supervisor.norms.prediction import get_next_lane_index, get_next_speed
 
 class LanePreference(Enum):
     """Enum for lane preferences."""
@@ -61,6 +61,124 @@ class LaneKeepingNorm(AbstractNorm):
 
     def __str__(self):
         return "LaneKeepingNorm"
+
+class MergeCourtesyNorm(AbstractNorm):
+    """Courtesy envelope behind a merging vehicle in its target highway lane.
+
+    When applicable (ramp merger present, contemplated next lane is the target,
+    ego behind or in line with the merger), bumper gap is forecast one policy
+    step under the candidate action (``get_next_speed``, merger speed fixed).
+    Penetration ``x' ∈ [0, 1]`` maps to cost ``sqrt(x')``. ``SLOWER`` lessens
+    cost via a larger forecast gap; it is not hard-excluded.
+    """
+
+    #: Road-network nodes used by MergeEnv's access ramp.
+    MERGE_NODES = frozenset({"j", "k"})
+
+    def __init__(
+        self,
+        courtesy_distance: float,
+        target_lane_id: int = 1,
+        policy_frequency: float = 1.0,
+        weight: float = 1.0,
+    ):
+        """Initialize the merge courtesy norm.
+
+        :param courtesy_distance: envelope length behind the merger [m].
+        :param target_lane_id: highway lane the merger joins (MergeEnv: 1 = right).
+        :param policy_frequency: decision rate [Hz]; ``dt = 1 / policy_frequency``.
+        :param weight: the norm weight, used for prioritization.
+        """
+        if courtesy_distance <= 0:
+            raise ValueError("courtesy_distance must be positive.")
+        if policy_frequency <= 0:
+            raise ValueError("policy_frequency must be positive.")
+
+        super().__init__(weight=weight)
+        self.courtesy_distance = float(courtesy_distance)
+        self.target_lane_id = int(target_lane_id)
+        self.policy_frequency = float(policy_frequency)
+
+    @classmethod
+    def _is_merging_vehicle(cls, other: Vehicle) -> bool:
+        """Return True if ``other`` is on MergeEnv's ramp or dedicated merge lane."""
+        lane_index = getattr(other, "lane_index", None)
+        if lane_index is None:
+            return False
+        _from, _to, lane_id = lane_index
+        if _from in cls.MERGE_NODES or _to in cls.MERGE_NODES:
+            return True
+        # Dedicated merge lane on the converging section (MergeEnv: ("b", "c", 2)).
+        return (_from, _to) == ("b", "c") and lane_id >= 2
+
+    def _merging_vehicles(self, vehicle: MDPVehicle) -> list[Vehicle]:
+        return [
+            other
+            for other in vehicle.road.vehicles
+            if other is not vehicle and self._is_merging_vehicle(other)
+        ]
+
+    # @override (commented out for backwards compatibility with python<3.12)
+    def is_violating_action(self, vehicle: MDPVehicle, action: Action) -> bool:
+        """Check if the action places ego inside a merging vehicle's courtesy envelope.
+
+        :param vehicle: the vehicle to check.
+        :param action: the action to check.
+        :return: True if the courtesy envelope is violated, False otherwise.
+        """
+        return self.calculate_cost(vehicle, action) > 0.0
+
+    # @override (commented out for backwards compatibility with python<3.12)
+    def calculate_cost(self, vehicle: MDPVehicle, action: Action) -> float:
+        """Action-conditional courtesy cost ``sqrt(x')`` from predicted gap.
+
+        :param vehicle: the ego vehicle to check.
+        :param action: the discrete meta-action to evaluate.
+        :return: cost in [0, 1]; 0 if courtesy is not applicable.
+        """
+        next_from, next_to, next_lane_id = get_next_lane_index(vehicle, action)
+        if next_lane_id != self.target_lane_id:
+            return 0.0
+
+        target_lane_index = (next_from, next_to, self.target_lane_id)
+        try:
+            target_lane = vehicle.road.network.get_lane(target_lane_index)
+        except KeyError:
+            return 0.0
+
+        mergers = self._merging_vehicles(vehicle)
+        if not mergers:
+            return 0.0
+
+        dt = 1.0 / self.policy_frequency
+        v_ego_next = float(get_next_speed(vehicle, action))
+        s_ego, _ = target_lane.local_coordinates(vehicle.position)
+
+        max_cost = 0.0
+        for merger in mergers:
+            s_merge, _ = target_lane.local_coordinates(merger.position)
+            # Behind or in line with the merger (not ahead).
+            if s_ego > s_merge:
+                continue
+            ego_front = s_ego + vehicle.LENGTH / 2.0
+            merge_rear = s_merge - merger.LENGTH / 2.0
+            gap = merge_rear - ego_front
+            v_merge = float(merger.speed)
+            gap_pred = gap + (v_merge - v_ego_next) * dt
+            linear = float(
+                np.clip(
+                    (self.courtesy_distance - gap_pred) / self.courtesy_distance,
+                    0.0,
+                    1.0,
+                )
+            )
+            cost = float(np.sqrt(linear))
+            if cost > max_cost:
+                max_cost = cost
+        return max_cost
+
+    def __str__(self):
+        return "MergeCourtesyNorm"
 
 class AvoidParkingLinesNorm(AbstractNorm):
     """Norm constraint for avoiding parking lines over the continuous action space."""

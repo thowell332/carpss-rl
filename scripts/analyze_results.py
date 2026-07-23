@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import numpy as np
 from collections import defaultdict
+from pathlib import Path
 import argparse
 
 import matplotlib
@@ -66,25 +67,35 @@ def list_csv_files(directory):
     return sorted(csv_files)
 
 
-def parse_configuration_from_filename(filename):
-    """Parse configuration from filename format: profile/method/model_env_value.csv
-    
-    :param filename: Path to the CSV file.
+def parse_configuration_from_filename(filename, results_dir=None):
+    """Parse configuration from result path and CSV stem.
+
+    Preferred layout (used by run_experiments*.sh)::
+
+        <env>/<profile>/<method>[_filtered|_unfiltered]/<stem>.csv
+
+    When ``results_dir`` already points at the ``<env>`` folder, paths are only
+    ``<profile>/<method>/<stem>.csv``; the env name is taken from ``results_dir``.
+
+    The CSV stem is ``<label>`` or ``<label>_<value>`` where ``value`` is a float
+    (e.g. ``3L30V_3L30V_0.05`` or ``MERGE_MERGE_BASIC_0.05``).
+
+    :param filename: Path to the CSV file (relative to the results root).
+    :param results_dir: Results root passed to the analyzer (optional).
     :return: Dictionary with parsed configuration fields.
     """
-    base = os.path.basename(filename)
-    name, _ = os.path.splitext(base)
-    parts = name.split('_')
-    model = parts[0]
-    env = parts[1]
-    value = None
-    if len(parts) > 2:
-        try:
-            value = float(parts[2])
-        except ValueError:
-            value = None
-    method_dir = os.path.basename(os.path.dirname(filename))
-    # Method directory may carry a filtered/unfiltered suffix, e.g. adaptive_filtered.
+    path = Path(filename)
+    method_dir = path.parent.name
+    profile = path.parent.parent.name
+
+    # results/<env>/<profile>/<method>/file.csv → env from first path component
+    env_from_dir = path.parts[0] if len(path.parts) >= 4 else None
+    # results_dir is already the env folder → profile/method/file.csv
+    if env_from_dir is None and results_dir is not None and len(path.parts) == 3:
+        root_name = Path(results_dir).resolve().name
+        if root_name and root_name not in {".", "results"}:
+            env_from_dir = root_name
+
     method_base = method_dir
     filter_status = None
     if method_dir.endswith("_filtered"):
@@ -93,16 +104,37 @@ def parse_configuration_from_filename(filename):
     elif method_dir.endswith("_unfiltered"):
         method_base = method_dir[: -len("_unfiltered")]
         filter_status = "unfiltered"
-    profile = os.path.basename(os.path.dirname(os.path.dirname(filename)))
+
+    # Peel trailing numeric hyperparameter from the stem when present.
+    stem = path.stem
+    value = None
+    label = stem
+    if "_" in stem:
+        head, tail = stem.rsplit("_", 1)
+        try:
+            value = float(tail)
+            label = head
+        except ValueError:
+            pass
+
+    if env_from_dir is not None:
+        model = env_from_dir
+        env = env_from_dir
+    elif "_" in label:
+        # Legacy flat naming: model_env[_value].csv
+        model, env = label.split("_", 1)
+    else:
+        model = env = label
+
     return {
-        'profile': profile,
-        'method': method_base,
-        'value': value,
-        'model': model,
-        'env': env,
-        'mode': method_base if method_base in ['default', 'naive', 'nop'] else 'default',
-        'filter': filter_status,
-        'filename': filename
+        "profile": profile,
+        "method": method_base,
+        "value": value,
+        "model": model,
+        "env": env,
+        "mode": method_base if method_base in ["default", "naive", "nop"] else "default",
+        "filter": filter_status,
+        "filename": filename,
     }
 
 
@@ -255,7 +287,7 @@ def load_and_group_data(results_dir):
         # Return as single-row DataFrame for compatibility
         return pd.DataFrame([out])
     for filename in csv_files:
-        config = parse_configuration_from_filename(filename)
+        config = parse_configuration_from_filename(filename, results_dir=results_dir)
         if config is None:
             print(f"Warning: Could not parse configuration from filename: {filename}")
             continue
@@ -268,6 +300,15 @@ def load_and_group_data(results_dir):
             # All result files are stored with per-episode rows; aggregate to a
             # single per-experiment row for downstream analysis.
             df_processed = _aggregate_episode_level_df(df)
+
+            # Alias RCPS→SCPS outcome column for details tables.
+            if (
+                "outcome_rcps_augmented_count" in df_processed.columns
+                and "outcome_scps_augmented_count" not in df_processed.columns
+            ):
+                df_processed["outcome_scps_augmented_count"] = df_processed[
+                    "outcome_rcps_augmented_count"
+                ]
 
             for key, value in config.items():
                 df_processed[key] = value

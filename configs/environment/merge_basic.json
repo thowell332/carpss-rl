@@ -1,0 +1,21 @@
+{
+  "_comment": "MergeEnvMEBasic evaluation config (matches RQL-Comparison/configs/MergeEnv/env.json).",
+  "simulation_frequency": 5,
+  "collision_reward": -0.5,
+  "high_speed_reward": 0.4,
+  "right_lane_reward": 0.1,
+  "merging_speed_reward": 0.0,
+  "lane_change_reward": 0,
+  "reward_speed_range": [20, 30],
+  "highway_vehicles": 5,
+  "spawn_longitude_jitter": 12.0,
+  "spawn_speed_jitter": 1.5,
+  "min_spawn_gap": 10.0,
+  "screen_width": 600,
+  "screen_height": 150,
+  "centering_position": [0.3, 0.5],
+  "scaling": 5.5,
+  "show_trajectories": false,
+  "render_agent": false,
+  "offscreen_rendering": true
+}

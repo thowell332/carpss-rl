@@ -258,7 +258,8 @@ class ExperimentRunner:
                 )
 
                 # Apply supervisor if needed and compute updated cost
-                if self.config.method != 'nop':
+                # Filter-only (nop + --filter) must still call predict/decide.
+                if self.config.method != 'nop' or self.config.filter:
                     supervised_action = int(supervisor.predict(self.model, obs))
                     norm_violation_costs = supervisor.calculate_norm_violation_costs(
                         supervised_action

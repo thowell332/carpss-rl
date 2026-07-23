@@ -17,11 +17,13 @@ from supervisor.abstract import (
 )
 from supervisor.profiles.abstract import AbstractNormProfile
 from supervisor.profiles.right_lane import RightLaneNormProfile
+from supervisor.profiles.merge_courtesy import MergeCourtesyNormProfile
 
 class DiscreteSupervisor(AbstractSupervisor):
     """RCPS supervisor class for the discrete action space HighwayEnv environment."""
     PROFILES: dict[str, type[AbstractNormProfile]] = {
-        'right_lane': RightLaneNormProfile
+        'right_lane': RightLaneNormProfile,
+        'merge_courtesy': MergeCourtesyNormProfile,
     }
     ACTIONS_ALL = DiscreteMetaAction.ACTIONS_ALL # Discrete action mapping
 

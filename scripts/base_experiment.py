@@ -74,6 +74,11 @@ class EpisodeMetrics:
                 self.basic_reward_config.get("high_speed_reward", 0.4)
             )
             self.base_reward = float(self.basic_reward_config.get("base_reward", 1.0))
+            # Included in basic when training put right-lane in the base reward
+            # (e.g. MergeEnvMEBasic). Highway basic keeps this at 0.0.
+            self.basic_right_lane_reward = float(
+                self.basic_reward_config.get("right_lane_reward", 0.0)
+            )
             speed_range = self.basic_reward_config.get(
                 "reward_speed_range", reward_speed_range
             )
@@ -81,6 +86,7 @@ class EpisodeMetrics:
             self.collision_reward = collision_reward
             self.high_speed_reward = float(self.env_config.get("high_speed_reward", 0.0))
             self.base_reward = 1.0
+            self.basic_right_lane_reward = 0.0
             speed_range = reward_speed_range
 
         self.right_lane_reward: float = float(
@@ -140,9 +146,16 @@ class EpisodeMetrics:
             basic_reward = (
                 self.collision_reward * (1.0 if crashed else 0.0)
                 + self.high_speed_reward * scaled_speed
+                + self.basic_right_lane_reward * lane_normalized
                 + self.base_reward
             )
-            added_reward = self.right_lane_reward * lane_normalized
+            # Add-on only: env right-lane beyond what is already counted as basic.
+            # Highway AddRight: basic=0, env>0 → added = env * lane.
+            # Merge MEBasic: basic=env → added = 0 (no double-count).
+            added_lane_reward = max(
+                0.0, self.right_lane_reward - self.basic_right_lane_reward
+            )
+            added_reward = added_lane_reward * lane_normalized
             if not on_road:
                 basic_reward = 0.0
                 added_reward = 0.0
