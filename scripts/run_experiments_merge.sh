@@ -2,7 +2,7 @@
 
 # SCPS experiment matrix for the merge environment (mirror of run_experiments.sh).
 
-NUM_EPISODES=100
+NUM_EPISODES=1000
 
 if [ $# -ge 1 ]; then
     ENVIRONMENTS=("$1")
@@ -23,31 +23,34 @@ experiments=(
     # BASELINES
     # <profile>         <method>    <value>  <filter>
     " merge_courtesy  nop             nan  False "  # Unsupervised
-    #" merge_courtesy  nop             nan  True  "  # Filter-only
-    #" merge_courtesy  naive           nan  False "
-    #" merge_courtesy  naive           nan  True  "
+    " merge_courtesy  nop             nan  True  "  # Filter-only
+    " merge_courtesy  naive           nan  False "
+    " merge_courtesy  naive           nan  True  "
 
     # ADAPTIVE
     # <profile>         <method>    <value>  <filter>
-    #" merge_courtesy  adaptive       0.05  False "
+    " merge_courtesy  adaptive       0.05  False "
+    " merge_courtesy  adaptive       0.01  True  "
+    " merge_courtesy  adaptive       0.02  True  "
+    " merge_courtesy  adaptive       0.03  True  "
     " merge_courtesy  adaptive       0.05  True  "
 
     # FIXED
     # <profile>         <method>    <value>  <filter>
-    #" merge_courtesy  fixed          1.00  False "
-    #" merge_courtesy  fixed          1.00  True  "
+    " merge_courtesy  fixed          1.00  False "
+    " merge_courtesy  fixed          1.00  True  "
 
     # PROJECTION
     # <profile>         <method>    <value>  <filter>
-    #" merge_courtesy  projection      nan  False "
-    #" merge_courtesy  projection      nan  True  "
+    " merge_courtesy  projection      nan  False "
+    " merge_courtesy  projection      nan  True  "
 
     # LOG SPACED TRIALS
     # <profile>         <method>    <value>  <filter>
     #" merge_courtesy  adaptive     0.0316  True  "
     #" merge_courtesy  adaptive     0.3162  True  "
     #" merge_courtesy  adaptive     3.1623  True  "
-    #" merge_courtesy  adaptive     10.000  True  "
+   # " merge_courtesy  adaptive     10.000  True  "
     )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

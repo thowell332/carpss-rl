@@ -16,8 +16,8 @@ from highway_env.vehicle.kinematics import Vehicle
 #: MergeEnv access-ramp nodes.
 MERGE_NODES = frozenset({"j", "k"})
 
-#: Default envelope length in vehicle lengths (matches MergeCourtesyNormProfile).
-DEFAULT_COURTESY_DISTANCE_LENGTHS = 10.0
+#: Default courtesy envelope length [m] (matches MergeCourtesyNormProfile).
+DEFAULT_COURTESY_DISTANCE = 90.0
 
 
 def is_merging_vehicle(other: Vehicle) -> bool:
@@ -64,6 +64,39 @@ def bumper_gap_on_lane(
     return float(merge_rear - ego_front)
 
 
+def courtesy_gate_gap(
+    ego: Vehicle,
+    target_lane_id: int = 1,
+) -> Optional[float]:
+    """Min actual bumper gap when the courtesy gate is active, else ``None``.
+
+    Gate (state-based, matches residual add-on applicability without requiring
+    envelope penetration): ego is on ``target_lane_id``, at least one ramp
+    merger exists, and ego is behind or abreast of that merger. Returns the
+    tightest (min) valid bumper gap among such mergers.
+    """
+    if ego.lane_index[2] != target_lane_id:
+        return None
+    mergers = merging_vehicles(ego)
+    if not mergers:
+        return None
+
+    _from, _to, _ = ego.lane_index
+    try:
+        target_lane = ego.road.network.get_lane((_from, _to, target_lane_id))
+    except KeyError:
+        return None
+
+    gaps: list[float] = []
+    for merger in mergers:
+        gap = bumper_gap_on_lane(ego, merger, target_lane)
+        if gap is not None:
+            gaps.append(gap)
+    if not gaps:
+        return None
+    return float(min(gaps))
+
+
 def max_actual_penetration(
     ego: Vehicle,
     courtesy_distance: float,
@@ -74,25 +107,10 @@ def max_actual_penetration(
     Returns 0 if courtesy is not applicable (no ramp merger, ego not on target
     lane, or ego ahead of all mergers).
     """
-    if ego.lane_index[2] != target_lane_id:
+    gap = courtesy_gate_gap(ego, target_lane_id=target_lane_id)
+    if gap is None:
         return 0.0
-    mergers = merging_vehicles(ego)
-    if not mergers:
-        return 0.0
-
-    _from, _to, _ = ego.lane_index
-    try:
-        target_lane = ego.road.network.get_lane((_from, _to, target_lane_id))
-    except KeyError:
-        return 0.0
-
-    max_x = 0.0
-    for merger in mergers:
-        gap = bumper_gap_on_lane(ego, merger, target_lane)
-        if gap is None:
-            continue
-        max_x = max(max_x, envelope_penetration(gap, courtesy_distance))
-    return max_x
+    return envelope_penetration(gap, courtesy_distance)
 
 
 def courtesy_add_on_reward(

@@ -38,7 +38,9 @@ class EnvViewer(object):
         self.clock = pygame.time.Clock()
 
         self.enabled = True
-        if os.environ.get("SDL_VIDEODRIVER", None) == "dummy":
+        # Dummy video driver is fine for offscreen surface rendering (rgb_array /
+        # --render-dir). Only disable drawing when we would need a real window.
+        if os.environ.get("SDL_VIDEODRIVER", None) == "dummy" and not self.offscreen:
             self.enabled = False
 
         self.observer_vehicle = None

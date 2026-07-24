@@ -249,6 +249,17 @@ def load_and_group_data(results_dir):
             out['mean_added_reward'] = float(df['total_added_reward'].mean())
             out['std_added_reward_episodes'] = float(df['total_added_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
 
+        # Merge courtesy gap violation (optional; present only in merge courtesy runs)
+        if 'mean_courtesy_gap_violation' in df.columns:
+            out['mean_courtesy_gap_violation'] = float(
+                df['mean_courtesy_gap_violation'].mean()
+            )
+            out['std_courtesy_gap_violation_episodes'] = (
+                float(df['mean_courtesy_gap_violation'].std(ddof=1))
+                if num_episodes > 1
+                else 0.0
+            )
+
         # Unsafe action selection rates (distance-based)
         if 'unsafe_frames' in df.columns:
             unsafe_frames = float(df['unsafe_frames'].sum())
@@ -345,6 +356,7 @@ def calculate_statistics(group_data):
         ("mean_added_reward", "std_added_reward_episodes"),
         ("mean_normalized_lane_index", "std_normalized_lane_index_episodes"),
         ("mean_total_expected_cost", "std_total_expected_cost_episodes"),
+        ("mean_courtesy_gap_violation", "std_courtesy_gap_violation_episodes"),
     ]
     for mean_col, std_col in pooled_specs:
         if mean_col in combined_df.columns and std_col in combined_df.columns and "num_episodes" in combined_df.columns:
@@ -399,6 +411,7 @@ def format_statistic(mean_val, std_val, n_experiments, metric_name=None):
         "mean_added_reward",
         "mean_normalized_lane_index",
         "mean_total_expected_cost",
+        "mean_courtesy_gap_violation",
     }
     if metric_name in metrics_use_std and not pd.isna(std_val):
         return f"{mean_val:.2f} ± {std_val:.2f}"
@@ -528,20 +541,38 @@ def generate_markdown_tables(grouped_data):
     :return: Tuple of (summary_tables, details_tables).
     """
     
+    # Include mean_courtesy_gap_violation only when present in any loaded result.
+    has_courtesy_gap_violation = any(
+        'mean_courtesy_gap_violation' in df.columns
+        for group_data in grouped_data.values()
+        for df in group_data
+    )
+
+    core_metrics = [
+        'mean_total_reward',
+        'mean_basic_reward',
+        'mean_added_reward',
+        'mean_total_cost',
+        'mean_total_expected_cost',
+        'mean_normalized_lane_index',
+    ]
+    if has_courtesy_gap_violation:
+        core_metrics.append('mean_courtesy_gap_violation')
+
     summary_metric_categories = {
         # For the top-of-summary tables, focus on reward decomposition
         # (mean reward per episode, not rates), realised/expected norm cost,
         # and the average normalised lane index.
-        'Core Metrics': [
-            'mean_total_reward',
-            'mean_basic_reward',
-            'mean_added_reward',
-            'mean_total_cost',
-            'mean_total_expected_cost',
-            'mean_normalized_lane_index',
-        ]
+        'Core Metrics': core_metrics
     }
-    
+
+    reward_cost_metrics = [
+        'mean_total_reward', 'mean_basic_reward', 'mean_added_reward',
+        'mean_total_cost', 'mean_total_expected_cost', 'cost_rate',
+    ]
+    if has_courtesy_gap_violation:
+        reward_cost_metrics.append('mean_courtesy_gap_violation')
+
     details_metric_categories = {
         'Violation Rates': [
             'speed_violation_rate', 'tailgating_violation_rate',
@@ -549,10 +580,7 @@ def generate_markdown_tables(grouped_data):
             'lane_change_tailgating_violation_rate', 'lane_change_braking_violation_rate',
             'collision_violation_rate', 'lane_change_collision_violation_rate'
         ],
-        'Reward & Cost Metrics': [
-            'mean_total_reward', 'mean_basic_reward', 'mean_added_reward',
-            'mean_total_cost', 'mean_total_expected_cost', 'cost_rate'
-        ],
+        'Reward & Cost Metrics': reward_cost_metrics,
         'Supervisor Statistics': [
             'mean_iterations_to_converge', 'convergence_rate',
             'outcome_unchanged_count', 'outcome_naively_augmented_count',
@@ -569,6 +597,7 @@ def generate_markdown_tables(grouped_data):
         'mean_total_cost'            : 'Total Norm Cost',
         'mean_total_expected_cost'   : 'Expected Norm Cost',
         'mean_normalized_lane_index' : 'Normalised Lane Index',
+        'mean_courtesy_gap_violation': 'Mean Courtesy Gap Violation',
         'avoided_cost_rate'      : 'Avoided Cost Rate',
         'mean_total_reward'      : 'Total Reward',
         'mean_basic_reward'      : 'Basic Reward',

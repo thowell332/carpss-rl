@@ -5,6 +5,16 @@ import os
 import sys
 from pathlib import Path
 
+# Headless frame dumps must set the video driver before pygame is imported.
+# Do NOT set this for --render (human GUI needs a real display).
+if "--render-dir" in sys.argv:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("OFFSCREEN_RENDERING", "1")
+    # Dummy + a stale/unreachable DISPLAY (common on WSL) can hang in pygame;
+    # offscreen rgb_array rendering does not need a window server.
+    os.environ.pop("DISPLAY", None)
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 # Add project root to path BEFORE importing highway_env to ensure local version is used
 script_dir = Path(__file__).parent
 project_root = script_dir.parent
@@ -90,6 +100,8 @@ class ExperimentConfig:
         self.num_episodes = args.episodes
         self.output_file = args.output
         self.seed = args.seed
+        self.render = bool(getattr(args, "render", False))
+        self.render_dir = getattr(args, "render_dir", None)
         self.model_env = CONFIGS[self.env]
         
         # Validate configuration
@@ -109,6 +121,9 @@ class ExperimentConfig:
         env_config_path = os.path.join("configs/environment", self.model_env['env_config'])
         if not os.path.exists(env_config_path):
             raise ValueError(f"Environment config not found: {env_config_path}")
+
+        if self.render_dir:
+            Path(self.render_dir).mkdir(parents=True, exist_ok=True)
 
 
 class ExperimentRunner:
@@ -195,17 +210,32 @@ class ExperimentRunner:
         print(f"  Episodes: {self.config.num_episodes}")
         print(f"  Base seed: {self.config.seed}")
         print(f"  Output: {self.config.output_file}")
-        
+        print(f"  Render: {self.config.render} dir={self.config.render_dir}")
+
+        render_mode = None
+        if self.config.render or self.config.render_dir:
+            # This highway_env fork uses env.render(mode=...), not gymnasium render_mode.
+            render_mode = (
+                "human" if self.config.render and not self.config.render_dir else "rgb_array"
+            )
+
         # Create environment using custom HighwayEnvMEAddRightReward
         # This environment exposes basic_reward and added_reward attributes
-        # Note: render_mode is not supported in the custom highway_env, so we omit it
         env = gymnasium.make("highway-ME-basic-AddRightRewardALL-v0")
         env_unwrapped: HighwayEnv = env.unwrapped
 
         # Override the default highway configuration with the loaded JSON config
         # so that lanes_count, vehicles_count, rewards, etc. match the selected setup.
         env_unwrapped.configure(self.env_config)
-        
+        if self.config.render_dir:
+            env_unwrapped.config["offscreen_rendering"] = True
+            env_unwrapped.config["render_agent"] = True
+            env_unwrapped.config["show_trajectories"] = False
+        elif self.config.render:
+            env_unwrapped.config["offscreen_rendering"] = False
+            env_unwrapped.config["render_agent"] = True
+            env_unwrapped.config["real_time_rendering"] = True
+
         # Create supervisor
         supervisor = self._create_supervisor(env_unwrapped)
         
@@ -243,6 +273,7 @@ class ExperimentRunner:
             # Track time spent in each lane for this episode
             # Keys match the CSV columns (`lane_i_time`)
             lane_times = {f"lane_{i}_time": 0.0 for i in range(self.lane_count)}
+            step_idx = 0
             while not (done or truncated):
                 # Get base model action
                 base_action, _ = self.model.predict(obs, deterministic=True)
@@ -284,7 +315,48 @@ class ExperimentRunner:
                     action_probs = torch.softmax(q_values, dim=-1)[0].detach().cpu().numpy()
                 cost_vector = supervisor.get_norm_violation_cost(supervisor.ACTIONS_ALL).detach().cpu().numpy()
                 expected_cost = float((action_probs * cost_vector).sum())
-                
+
+                if self.config.render or self.config.render_dir:
+                    # --render needs a real display; --render-dir can use dummy SDL.
+                    if self.config.render and not os.environ.get("DISPLAY"):
+                        print(
+                            "WARNING: --render needs a display (DISPLAY is unset). "
+                            "On WSL use WSLg/an X server, or pass --render-dir for PNGs."
+                        )
+                        self.config.render = False
+                    elif (
+                        self.config.render_dir
+                        and not os.environ.get("DISPLAY")
+                        and os.environ.get("SDL_VIDEODRIVER") != "dummy"
+                    ):
+                        print(
+                            "WARNING: skipping frames (--render-dir) without DISPLAY. "
+                            "Start with SDL_VIDEODRIVER=dummy, or use --render-dir only."
+                        )
+                        self.config.render_dir = None
+
+                    if self.config.render or self.config.render_dir:
+                        try:
+                            frame = env_unwrapped.render(mode=render_mode or "rgb_array")
+                        except Exception as exc:
+                            print(f"WARNING: rendering disabled after failure: {exc}")
+                            self.config.render = False
+                            self.config.render_dir = None
+                            frame = None
+                        else:
+                            if self.config.render_dir is not None and frame is not None:
+                                try:
+                                    from PIL import Image
+                                except ImportError as exc:
+                                    raise RuntimeError(
+                                        "Saving render frames requires Pillow (`pip install pillow`)."
+                                    ) from exc
+                                out = (
+                                    Path(self.config.render_dir)
+                                    / f"ep{episode:03d}_t{step_idx:03d}.png"
+                                )
+                                Image.fromarray(frame).save(out)
+
                 # Calculate metrics
                 speed = env_unwrapped.vehicle.speed
                 _, _, lane_index = env_unwrapped.vehicle.lane_index
@@ -314,7 +386,8 @@ class ExperimentRunner:
                 
                 # Take action
                 obs, _, done, truncated, info = env.step(action)
-                
+                step_idx += 1
+
                 # Check for collision
                 if done or truncated:
                     if info.get("crashed", False):
@@ -385,6 +458,17 @@ def parse_arguments():
     )
     parser.add_argument('--output', required=True,
                        help='Output CSV file path')
+    parser.add_argument(
+        '--render',
+        action='store_true',
+        help='Render with render_mode=human (requires a display)',
+    )
+    parser.add_argument(
+        '--render-dir',
+        type=str,
+        default=None,
+        help='Save rgb_array frames as PNGs in this directory (headless-friendly)',
+    )
     args = parser.parse_args()
     
     # Validate method and value for adaptive/fixed methods

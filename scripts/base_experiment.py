@@ -115,8 +115,14 @@ class EpisodeMetrics:
         crashed: bool,
         env_unwrapped=None,
         expected_cost: float | None = None,
+        added_reward: float | None = None,
     ):
-        """Add data from a single timestep."""
+        """Add data from a single timestep.
+
+        :param added_reward: Optional override for the add-on reward component.
+            When provided (e.g. merge courtesy ``-sqrt(x)``), replaces the
+            default right-lane add-on derived from env/basic configs.
+        """
         self.episode_length += 1
         self.speed_history.append(speed)
 
@@ -149,39 +155,45 @@ class EpisodeMetrics:
                 + self.basic_right_lane_reward * lane_normalized
                 + self.base_reward
             )
-            # Add-on only: env right-lane beyond what is already counted as basic.
-            # Highway AddRight: basic=0, env>0 → added = env * lane.
-            # Merge MEBasic: basic=env → added = 0 (no double-count).
-            added_lane_reward = max(
-                0.0, self.right_lane_reward - self.basic_right_lane_reward
-            )
-            added_reward = added_lane_reward * lane_normalized
+            if added_reward is None:
+                # Add-on only: env right-lane beyond what is already counted as basic.
+                # Highway AddRight: basic=0, env>0 → added = env * lane.
+                # Merge MEBasic: basic=env → added = 0 (no double-count).
+                # Callers may pass an explicit add-on (e.g. merge courtesy residual).
+                added_lane_reward = max(
+                    0.0, self.right_lane_reward - self.basic_right_lane_reward
+                )
+                added_reward = added_lane_reward * lane_normalized
             if not on_road:
                 basic_reward = 0.0
                 added_reward = 0.0
         else:
             # Legacy path (e.g. parking): prefer env-exposed split when available.
             basic_reward = None
-            added_reward = None
 
             if env_unwrapped is not None:
                 try:
                     basic_reward = env_unwrapped.basic_reward
-                    added_reward = env_unwrapped.added_reward
+                    if added_reward is None:
+                        added_reward = env_unwrapped.added_reward
                 except AttributeError:
                     pass
 
             if basic_reward is None or added_reward is None:
-                basic_reward = (
-                    self.collision_reward * (1.0 if crashed else 0.0)
-                    + self.high_speed_reward * scaled_speed
-                    + self.base_reward
-                )
-                if not on_road:
-                    basic_reward = 0.0
+                if basic_reward is None:
+                    basic_reward = (
+                        self.collision_reward * (1.0 if crashed else 0.0)
+                        + self.high_speed_reward * scaled_speed
+                        + self.base_reward
+                    )
+                    if not on_road:
+                        basic_reward = 0.0
 
-                added_reward = self.right_lane_reward * lane_normalized
-                if not on_road:
+                if added_reward is None:
+                    added_reward = self.right_lane_reward * lane_normalized
+                    if not on_road:
+                        added_reward = 0.0
+                elif not on_road:
                     added_reward = 0.0
 
         # Total reward: basic + added

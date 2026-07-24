@@ -12,6 +12,9 @@ from pathlib import Path
 if "--render-dir" in sys.argv:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("OFFSCREEN_RENDERING", "1")
+    # Dummy + a stale/unreachable DISPLAY (common on WSL) can hang in pygame;
+    # offscreen rgb_array rendering does not need a window server.
+    os.environ.pop("DISPLAY", None)
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 # Add project root to path BEFORE importing highway_env to ensure local version is used
@@ -29,6 +32,11 @@ from stable_baselines3 import DQN, DQN_ME
 # Import custom highway_env to register environments
 import highway_env  # noqa: F401
 from highway_env.envs.merge_env import MergeEnv
+from highway_env.envs.merge_courtesy import (
+    DEFAULT_COURTESY_DISTANCE,
+    courtesy_add_on_reward,
+    courtesy_gate_gap,
+)
 
 from supervisor import DiscreteSupervisor, PolicyAugmentMethod
 from supervisor.abstract import AbstractSupervisor
@@ -55,7 +63,7 @@ CONFIGS = {
 
 
 class MergeCSVWriter(CSVWriter):
-    """CSV writer that additionally records lane occupancy for merge experiments."""
+    """CSV writer for merge experiments: lane times + courtesy-gap metric."""
 
     def __init__(self, output_file: str, lane_count: int):
         self.lane_count = lane_count
@@ -64,7 +72,10 @@ class MergeCSVWriter(CSVWriter):
     def _get_fieldnames(self) -> list[str]:
         base_fields = super()._get_fieldnames()
         lane_fields = [f"lane_{i}_time" for i in range(self.lane_count)]
-        return base_fields + lane_fields
+        # Mean courtesy-gap violation [m] while gate is active; NaN if never active.
+        # Violation = max(0, threshold - gap): 0 when gap exceeds the envelope.
+        courtesy_fields = ["mean_courtesy_gap_violation", "courtesy_active_steps"]
+        return base_fields + lane_fields + courtesy_fields
 
 
 class ExperimentConfig:
@@ -352,6 +363,18 @@ class ExperimentRunner:
 
             done = truncated = False
             lane_times = {f"lane_{i}_time": 0.0 for i in range(self.lane_count)}
+            courtesy_gap_violations: list[float] = []
+            courtesy_norm = next(
+                (n for n in supervisor.norms if str(n) == "MergeCourtesyNorm"),
+                None,
+            )
+            courtesy_target_lane = (
+                int(courtesy_norm.target_lane_id) if courtesy_norm is not None else 1
+            )
+            if courtesy_norm is not None:
+                courtesy_threshold = float(courtesy_norm.courtesy_distance)
+            else:
+                courtesy_threshold = float(DEFAULT_COURTESY_DISTANCE)
             step_idx = 0
 
             while not (done or truncated):
@@ -500,6 +523,23 @@ class ExperimentRunner:
                 if lane_key in lane_times:
                     lane_times[lane_key] += policy_period
 
+                gap = courtesy_gate_gap(
+                    env_unwrapped.vehicle,
+                    target_lane_id=courtesy_target_lane,
+                )
+                if gap is not None:
+                    # Positive shortfall inside the courtesy envelope; 0 otherwise.
+                    courtesy_gap_violations.append(
+                        max(0.0, courtesy_threshold - float(gap))
+                    )
+
+                # Residual add-on dual of the courtesy norm: -sqrt(x) from actual gap.
+                courtesy_added = courtesy_add_on_reward(
+                    env_unwrapped.vehicle,
+                    courtesy_distance=courtesy_threshold,
+                    target_lane_id=courtesy_target_lane,
+                )
+
                 episode_metrics.add_timestep(
                     speed=speed,
                     lane_index=lane_index,
@@ -511,6 +551,7 @@ class ExperimentRunner:
                     crashed=crashed,
                     env_unwrapped=env_unwrapped,
                     expected_cost=expected_cost,
+                    added_reward=courtesy_added,
                 )
 
                 obs, _, done, truncated, info = env.step(action)
@@ -533,6 +574,13 @@ class ExperimentRunner:
             for i in range(self.lane_count):
                 key = f"lane_{i}_time"
                 episode_results[key] = lane_times.get(key, 0.0)
+
+            episode_results["courtesy_active_steps"] = len(courtesy_gap_violations)
+            episode_results["mean_courtesy_gap_violation"] = (
+                float(np.mean(courtesy_gap_violations))
+                if courtesy_gap_violations
+                else float("nan")
+            )
 
             self.csv_writer.write_experiment(episode_results)
 
