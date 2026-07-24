@@ -268,11 +268,13 @@ class MergeEnvMEAddCourtesyReward(MergeEnvMEBasic):
         del action  # state-based add-on (actual gap), like highway AddRight
         from highway_env.envs.merge_courtesy import courtesy_add_on_reward
 
-        return courtesy_add_on_reward(
+        self.added_reward = courtesy_add_on_reward(
             self.vehicle,
             courtesy_distance=float(self.config["courtesy_distance"]),
             target_lane_id=int(self.config["courtesy_target_lane_id"]),
         )
+        self.basic_reward = 0.0
+        return float(self.added_reward)
 
 
 def _register(id: str, entry_point: str, **kwargs) -> None:
