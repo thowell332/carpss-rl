@@ -17,7 +17,7 @@ if [ $# -ge 2 ]; then
 fi
 
 # Set to true to overwrite existing results
-FORCE_WRITE=true
+FORCE_WRITE=false
 
 experiments=(
     # BASELINES
@@ -30,15 +30,12 @@ experiments=(
     # ADAPTIVE
     # <profile>         <method>    <value>  <filter>
     " merge_courtesy  adaptive       0.05  False "
-    " merge_courtesy  adaptive       0.01  True  "
-    " merge_courtesy  adaptive       0.02  True  "
-    " merge_courtesy  adaptive       0.03  True  "
     " merge_courtesy  adaptive       0.05  True  "
 
     # FIXED
     # <profile>         <method>    <value>  <filter>
-    " merge_courtesy  fixed          1.00  False "
-    " merge_courtesy  fixed          1.00  True  "
+    " merge_courtesy  fixed          0.75  False "
+    " merge_courtesy  fixed          0.75  True  "
 
     # PROJECTION
     # <profile>         <method>    <value>  <filter>
@@ -46,19 +43,25 @@ experiments=(
     " merge_courtesy  projection      nan  True  "
 
     # LOG SPACED TRIALS
-    # <profile>         <method>    <value>  <filter>
-    #" merge_courtesy  adaptive     0.0316  True  "
-    #" merge_courtesy  adaptive     0.3162  True  "
-    #" merge_courtesy  adaptive     3.1623  True  "
-   # " merge_courtesy  adaptive     10.000  True  "
+    # <profile>   <method>    <value>  <filter>
+    " right_lane  adaptive     0.0100  True  "
+    " right_lane  adaptive     0.0316  True  "
+    " right_lane  adaptive     0.1000  True  "
+    " right_lane  adaptive     0.3162  True  "
+    " right_lane  adaptive     1.0000  True  "
+    " right_lane  adaptive     3.1623  True  "
+    " right_lane  adaptive     10.000  True  "
+    " right_lane  adaptive     31.623  True  "
+    " right_lane  adaptive     100.00  True  "
     )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+RESULTS_ROOT="$PROJECT_ROOT/results/merge"
 
 for ENV in "${ENVIRONMENTS[@]}"; do
 
-    mkdir -p "$PROJECT_ROOT/results/$ENV"
+    mkdir -p "$RESULTS_ROOT/$ENV"
 
     for args in "${experiments[@]}"; do
         # Each experiment line: <profile> <method> <value> <filter>
@@ -72,13 +75,13 @@ for ENV in "${ENVIRONMENTS[@]}"; do
             sub_dir="${method}_unfiltered"
         fi
 
-        mkdir -p "$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}"
+        mkdir -p "$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}"
 
         file_prefix="MERGE_${ENV}"
         if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
-            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
+            out_path="$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
         else
-            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
+            out_path="$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
         fi
 
         if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then

@@ -203,42 +203,55 @@ class AbstractSupervisor(ABC):
         """
         pass
 
-    def shape(self, model: BaseAlgorithm, obs: Observation) -> torch.Tensor:
+    def shape(
+        self,
+        model: BaseAlgorithm,
+        obs: Observation
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Shapes the model policy with the configured policy augment method.
         
         :param model: base RL model.
         :param obs: observation from the environment.
-        :return: shaped policy as a Torch tensor.
+        :return: a tuple of (unshaped policy, shaped policy) as Torch tensors.
         """
         if model.device != self.device:
             raise RuntimeError(f"Expected model device ({model.device}) to match supervisor device "
                                f"({self.device})!")
         
-        policy = self._get_model_policy(model, obs)
+        unshaped_policy = self._get_model_policy(model, obs)
+        shaped_policy = unshaped_policy
         outcome = PolicyAugmentOutcome.UNCHANGED
         
         # Augment the policy based on the supervisor mode
         if self.method == PolicyAugmentMethod.NOP:
             pass
         elif self.method == PolicyAugmentMethod.NAIVE:
-            policy, outcome = self._augment_policy_naive(policy)
+            shaped_policy, outcome = self._augment_policy_naive(unshaped_policy)
         elif self.method in [
             PolicyAugmentMethod.ADAPTIVE,
             PolicyAugmentMethod.FIXED,
             PolicyAugmentMethod.PROJECTION
         ]:
-            policy, root_results, outcome = self._augment_policy_rcps(policy, self.method)
+            shaped_policy, root_results, outcome = self._augment_policy_rcps(
+                unshaped_policy, self.method
+            )
             self.root_results_history.append(root_results) # Keep track of root finding results
         else:
             raise ValueError(f"Unknown supervisor method: {self.method}")
         self.outcome_history.append(outcome) # Keep track of policy augment outcomes
-        return policy
+        return unshaped_policy, shaped_policy
 
     @abstractmethod
-    def decide(self, policy: torch.Tensor, enforce_constraints: bool = True) -> Action:
-        """Select the final action based on the augmented policy.
+    def decide(
+        self,
+        unshaped_policy: torch.Tensor,
+        shaped_policy: torch.Tensor,
+        enforce_constraints: bool = True
+    ) -> Action:
+        """Select the final action based on the unshaped and shaped policies.
 
-        :param policy: the augmented policy as a torch Tensor.
+        :param unshaped_policy: the original model policy as a torch Tensor.
+        :param shaped_policy: the augmented policy as a torch Tensor.
         :param enforce_constraints: whether to enforce hard constraints by projection.
         :return: final action selection.
         """
@@ -251,7 +264,8 @@ class AbstractSupervisor(ABC):
         :param obs: observation from the environment.
         :return: final action selection.
         """
-        return self.decide(self.shape(model, obs), self.enforce_constraints)
+        unshaped_policy, shaped_policy = self.shape(model, obs)
+        return self.decide(unshaped_policy, shaped_policy, self.enforce_constraints)
 
     @staticmethod
     def print_obs(obs: Observation):

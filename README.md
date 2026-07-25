@@ -28,8 +28,12 @@ For convienence, the in-distribution environment with four lanes and 20 vehicles
     - [run_experiments.sh](scripts/run_experiments.sh) - Useful script for running multiple experiments and recording the results.
     - [analyze_results.py](scripts/analyze_results.py) - Analysis script for generating tables and plots from recorded results.
     - [debug_collision.py](scripts/debug_collision.py) - Debugging script for replaying a specific episode under the selected configuration with the GUI enabled.
-- [results/](results/) - Raw CSV results for the pre-trained model in `4L20V`, `6L50V`, and `2L10V` environments.
-- [analysis/](analysis/) - Analysis generated from the raw results in each environment, including markdown tables and plots.
+- [results/](results/) - Raw CSV results, organized by domain:
+    - [results/highway/](results/highway/) - Highway / complex zero-shot environment runs.
+    - [results/merge/](results/merge/) - Merge-environment courtesy runs.
+- [analysis/](analysis/) - Analysis generated from the raw results, organized the same way:
+    - [analysis/highway/](analysis/highway/) - Tables and plots for highway.
+    - [analysis/merge/](analysis/merge/) - Tables and plots for merge.
 
 ## 2. Getting Started
 
@@ -73,7 +77,8 @@ If no environment is provided, this script will default to running the entire su
 To analyze the collected data, you can either inspect the CSV files, or use the analysis script which is provided for convenience.
 
 ```bash
-python scripts/analyze_results.py --results results/<env> --output analysis/<env>
+python scripts/analyze_results.py --results-dir results/highway --output-dir analysis/highway
+python scripts/analyze_results.py --results-dir results/merge --output-dir analysis/merge
 ```
 
 Summary statistics will be written to the specified directory. Most of the relevant information from the experimental data will be written to a `summary.md` file in the specified output directory. This file contains information about the collision rate, norm violation cost rate, and vehicle speed for all experimental configurations. Use `--help` to read all of the command-line options.

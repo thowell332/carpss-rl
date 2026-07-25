@@ -302,14 +302,21 @@ class ContinuousSupervisor(AbstractSupervisor):
         return torch.stack([updated_mean, updated_std], dim=0) # Shape: (2, act_dim)
 
     # @override (commented out for backwards compatibility with python<3.12)
-    def decide(self, policy: torch.Tensor, enforce_constraints: bool = True) -> Action:
-        """Select the final action based on the augmented policy.
+    def decide(
+        self,
+        unshaped_policy: torch.Tensor,
+        shaped_policy: torch.Tensor,
+        enforce_constraints: bool = True
+    ) -> Action:
+        """Select the final action based on the unshaped and shaped policies.
 
-        :param policy: the augmented policy as a torch Tensor.
+        :param unshaped_policy: the original model policy as a torch Tensor.
+        :param shaped_policy: the augmented policy as a torch Tensor.
+        :param enforce_constraints: whether to enforce hard constraints by projection.
         :return: final action selection.
         """
         if enforce_constraints:
             raise NotImplementedError("Constraint enforcement not implemented")
         
-        mean, _ = policy
+        mean, _ = shaped_policy
         return mean.numpy(force=True)

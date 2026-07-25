@@ -240,28 +240,45 @@ class DiscreteSupervisor(AbstractSupervisor):
         return (constraint_violations == torch.min(constraint_violations))
 
     # @override (commented out for backwards compatibility with python<3.12)
-    def decide(self, policy: torch.Tensor, enforce_constraints: bool = True) -> Action:
-        """Select the final action based on the augmented policy.
+    def decide(
+        self,
+        unshaped_policy: torch.Tensor,
+        shaped_policy: torch.Tensor,
+        enforce_constraints: bool = True
+    ) -> Action:
+        """Select the final action based on the unshaped and shaped policies.
 
-        :param policy: the augmented policy as a torch Tensor.
+        :param unshaped_policy: the original model policy as a torch Tensor.
+        :param shaped_policy: the augmented policy as a torch Tensor.
         :param enforce_constraints: whether to enforce hard constraints by projection.
         :return: final action selection.
         """
         if not enforce_constraints:
             if self.verbose:
-                print("Not enforcing constraints! Selecting from original policy.")
-            # Move to CPU before converting to a Python int
-            return int(policy.argmax().detach().cpu().item())
-        
-        permissibility_mask = self._get_permissibility_mask()        
-        policy_permissible = policy[permissibility_mask]
-        policy_permissible /= torch.sum(policy_permissible)
-        policy_filtered = torch.full_like(policy, 0.0, device=self.device)
-        policy_filtered[permissibility_mask] = policy_permissible
+                print("Not enforcing constraints! Selecting from shaped policy.")
+            return int(shaped_policy.argmax().detach().cpu().item())
+
+        mask = self._get_permissibility_mask()
+        selection_policy = shaped_policy
+        # Prefer the shaped policy over the soft-permissible set when it has mass there.
+        # Otherwise fall back to the unshaped policy over the cost-minimal permissible set,
+        # so the selected action is still minimum-cost among soft-permissible actions.
+        if torch.sum(shaped_policy[mask]) <= 0:
+            if self.verbose:
+                print(
+                    "Shaped policy has no mass on soft-permissible actions; "
+                    "falling back to unshaped policy over the cost-minimal permissible set."
+                )
+            cost = self.get_norm_violation_cost(self.ACTIONS_ALL)
+            mask = mask & torch.isclose(cost, torch.min(cost[mask]))
+            selection_policy = unshaped_policy
+
+        policy_filtered = torch.zeros_like(shaped_policy)
+        support = selection_policy[mask]
+        policy_filtered[mask] = support / torch.sum(support)
         if self.verbose:
             print("Filtered Model Policy Probabilities:")
             for action, prob in enumerate(policy_filtered):
                 print(f"  {self.ACTIONS_ALL[action]}: {prob:.3f}")
 
-        # Move to CPU before converting to a Python int
         return int(policy_filtered.argmax().detach().cpu().item())

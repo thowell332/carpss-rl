@@ -72,7 +72,12 @@ def parse_configuration_from_filename(filename, results_dir=None):
 
     Preferred layout (used by run_experiments*.sh)::
 
-        <env>/<profile>/<method>[_filtered|_unfiltered]/<stem>.csv
+        <domain>/<env>/<profile>/<method>[_filtered|_unfiltered]/<stem>.csv
+
+    where ``domain`` is ``highway`` or ``merge``. Legacy layouts without the
+    domain prefix are still accepted::
+
+        <env>/<profile>/<method>/<stem>.csv
 
     When ``results_dir`` already points at the ``<env>`` folder, paths are only
     ``<profile>/<method>/<stem>.csv``; the env name is taken from ``results_dir``.
@@ -88,12 +93,19 @@ def parse_configuration_from_filename(filename, results_dir=None):
     method_dir = path.parent.name
     profile = path.parent.parent.name
 
-    # results/<env>/<profile>/<method>/file.csv → env from first path component
-    env_from_dir = path.parts[0] if len(path.parts) >= 4 else None
+    DOMAIN_DIRS = {"highway", "merge"}
+    env_from_dir = None
+    # results/<domain>/<env>/<profile>/<method>/file.csv
+    if len(path.parts) >= 5 and path.parts[0] in DOMAIN_DIRS:
+        env_from_dir = path.parts[1]
+    # results/<env>/<profile>/<method>/file.csv (legacy) or
+    # results/<domain>/<env>/... when results_dir is the domain folder
+    elif len(path.parts) >= 4:
+        env_from_dir = path.parts[0]
     # results_dir is already the env folder → profile/method/file.csv
     if env_from_dir is None and results_dir is not None and len(path.parts) == 3:
         root_name = Path(results_dir).resolve().name
-        if root_name and root_name not in {".", "results"}:
+        if root_name and root_name not in {".", "results", *DOMAIN_DIRS}:
             env_from_dir = root_name
 
     method_base = method_dir
@@ -242,6 +254,9 @@ def load_and_group_data(results_dir):
         # These are the per-episode aggregates across all episodes in an experiment.
         if 'total_reward' in df.columns:
             out['mean_total_reward'] = float(df['total_reward'].mean())
+            out['std_total_reward_episodes'] = (
+                float(df['total_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
+            )
         if 'total_basic_reward' in df.columns:
             out['mean_basic_reward'] = float(df['total_basic_reward'].mean())
             out['std_basic_reward_episodes'] = float(df['total_basic_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
@@ -249,16 +264,40 @@ def load_and_group_data(results_dir):
             out['mean_added_reward'] = float(df['total_added_reward'].mean())
             out['std_added_reward_episodes'] = float(df['total_added_reward'].std(ddof=1)) if num_episodes > 1 else 0.0
 
-        # Merge courtesy gap violation (optional; present only in merge courtesy runs)
+        # Merge courtesy gap violation (optional; present only in merge courtesy runs).
+        # CSVs store the mean over *active-gate* steps only. Reweight by the fraction
+        # of the episode the gate was active so inactive steps count as 0:
+        #   full_episode = mean_active * (active_steps / episode_length)
         if 'mean_courtesy_gap_violation' in df.columns:
-            out['mean_courtesy_gap_violation'] = float(
-                df['mean_courtesy_gap_violation'].mean()
-            )
-            out['std_courtesy_gap_violation_episodes'] = (
-                float(df['mean_courtesy_gap_violation'].std(ddof=1))
-                if num_episodes > 1
-                else 0.0
-            )
+            if (
+                'courtesy_active_steps' in df.columns
+                and 'episode_length' in df.columns
+            ):
+                active = df['courtesy_active_steps'].astype(float)
+                lengths = df['episode_length'].astype(float)
+                active_mean = df['mean_courtesy_gap_violation'].astype(float)
+                frac = np.where(lengths > 0, active / lengths, 0.0)
+                # NaN active-mean (never engaged) → 0 contribution over the episode.
+                episode_means = np.where(
+                    np.isfinite(active_mean),
+                    active_mean * frac,
+                    0.0,
+                )
+                # If active_steps is 0, force 0 even if a stale mean is present.
+                episode_means = np.where(active > 0, episode_means, 0.0)
+                out['mean_courtesy_gap_violation'] = float(np.mean(episode_means))
+                out['std_courtesy_gap_violation_episodes'] = (
+                    float(np.std(episode_means, ddof=1)) if num_episodes > 1 else 0.0
+                )
+            else:
+                out['mean_courtesy_gap_violation'] = float(
+                    df['mean_courtesy_gap_violation'].mean()
+                )
+                out['std_courtesy_gap_violation_episodes'] = (
+                    float(df['mean_courtesy_gap_violation'].std(ddof=1))
+                    if num_episodes > 1
+                    else 0.0
+                )
 
         # Unsafe action selection rates (distance-based)
         if 'unsafe_frames' in df.columns:
@@ -284,7 +323,7 @@ def load_and_group_data(results_dir):
                     total_cnt = float(df[col].sum())
                     out[rate_col] = total_cnt / unsafe_ttc_frames
 
-        # Supervisor statistics: average convergence metrics, sum outcome counts
+        # Supervisor statistics: average convergence metrics, outcome fractions
         if 'mean_iterations_to_converge' in df.columns:
             out['mean_iterations_to_converge'] = float(df['mean_iterations_to_converge'].mean())
         if 'convergence_rate' in df.columns:
@@ -292,8 +331,13 @@ def load_and_group_data(results_dir):
 
         outcome_cols = [c for c in df.columns
                         if c.startswith('outcome_') and c.endswith('_count')]
-        for col in outcome_cols:
-            out[col] = float(df[col].sum())
+        if outcome_cols:
+            total_outcomes = float(df[outcome_cols].to_numpy().sum())
+            for col in outcome_cols:
+                frac_col = col[: -len('_count')] + '_fraction'
+                out[frac_col] = (
+                    float(df[col].sum()) / total_outcomes if total_outcomes > 0 else 0.0
+                )
 
         # Return as single-row DataFrame for compatibility
         return pd.DataFrame([out])
@@ -314,11 +358,11 @@ def load_and_group_data(results_dir):
 
             # Alias RCPS→SCPS outcome column for details tables.
             if (
-                "outcome_rcps_augmented_count" in df_processed.columns
-                and "outcome_scps_augmented_count" not in df_processed.columns
+                "outcome_rcps_augmented_fraction" in df_processed.columns
+                and "outcome_scps_augmented_fraction" not in df_processed.columns
             ):
-                df_processed["outcome_scps_augmented_count"] = df_processed[
-                    "outcome_rcps_augmented_count"
+                df_processed["outcome_scps_augmented_fraction"] = df_processed[
+                    "outcome_rcps_augmented_fraction"
                 ]
 
             for key, value in config.items():
@@ -351,6 +395,7 @@ def calculate_statistics(group_data):
 
     # Override selected metrics to use pooled std over episodes (rather than across experiments)
     pooled_specs = [
+        ("mean_total_reward", "std_total_reward_episodes"),
         ("mean_basic_reward", "std_basic_reward_episodes"),
         ("mean_total_cost", "std_total_cost_episodes"),
         ("mean_added_reward", "std_added_reward_episodes"),
@@ -391,38 +436,20 @@ def calculate_statistics(group_data):
 
 
 def format_statistic(mean_val, std_val, n_experiments, metric_name=None):
-    """Format mean and uncertainty as 'mean ± X'.
-    
+    """Format mean and episode-level standard deviation as ``mean ± std``.
+
     :param mean_val: mean value to format.
-    :param std_val: standard deviation value.
-    :param n_experiments: number of experiments for standard error calculation.
+    :param std_val: sample standard deviation over episodes (``ddof=1``).
+    :param n_experiments: unused; kept for call-site compatibility.
     :param metric_name: optional metric name for additional context.
-    :return: formatted string showing mean ± standard error, or just mean if only one experiment,
-             or "-" if no valid data.
+    :return: formatted string, or ``"-"`` if no valid data.
     """
+    del n_experiments, metric_name  # reserved for callers / future use
     if pd.isna(mean_val):
         return "-"
-
-    # Metrics where we always want mean ± std over episodes (if std is available),
-    # regardless of how many experiments contributed.
-    metrics_use_std = {
-        "mean_basic_reward",
-        "mean_total_cost",
-        "mean_added_reward",
-        "mean_normalized_lane_index",
-        "mean_total_expected_cost",
-        "mean_courtesy_gap_violation",
-    }
-    if metric_name in metrics_use_std and not pd.isna(std_val):
-        return f"{mean_val:.2f} ± {std_val:.2f}"
-
-    # For all other metrics: with only one experiment or no std, show just the mean.
-    if n_experiments <= 1 or pd.isna(std_val):
+    if pd.isna(std_val):
         return f"{mean_val:.2f}"
-
-    # Default: mean ± standard error across experiments
-    se_val = std_val / np.sqrt(n_experiments)
-    return f"{mean_val:.2f} ± {se_val:.2f}"
+    return f"{mean_val:.2f} ± {std_val:.2f}"
 
 
 def format_collision_rate(group_data):
@@ -457,18 +484,14 @@ def format_collision_rate(group_data):
     else:
         total_time_hours = total_time_seconds / 3600
         collision_rate = total_collisions / total_time_hours
-        # NOTE: We can model the collision data as a binomial distribution where each episode is a
-        # trial that either ends with success (no collision) or failure (collision).
-        n = sum([df['num_episodes'].sum() for df in group_data]) # n  = total number of trials
-        p = total_collisions / n                                 # p  = probability of a collision
-        se_p = np.sqrt(p * (1 - p) / n)                          # SE = sqrt(n*p*(1-p)) / n
-        # NOTE: We can propagate the standard error to a linear function of p:
-        # f(p) = (p * 3600) / (ep_length * policy_period)
-        # |df/dp| = 3600 / (ep_length * policy_period)
-        # se_f = |df/dp| * se_p = (3600 * se_p) / (ep_length * policy_period)
+        # Episode-level Bernoulli collision indicator has std sqrt(p*(1-p)).
+        # Propagate that std (not SE) to the hourly collision rate.
+        n = sum([df['num_episodes'].sum() for df in group_data])
+        p = total_collisions / n if n > 0 else 0.0
+        std_p = np.sqrt(p * (1 - p)) if n > 1 else 0.0
         mean_episode_length = total_time_seconds / n if n > 0 else 1
-        se_collision_rate = (3600 * se_p) / (mean_episode_length * policy_period)
-        return f"{collision_rate:.2f} ± {se_collision_rate:.2f}"
+        std_collision_rate = (3600 * std_p) / (mean_episode_length * policy_period)
+        return f"{collision_rate:.2f} ± {std_collision_rate:.2f}"
 
 
 def compute_success_rate(group_data):
@@ -566,25 +589,11 @@ def generate_markdown_tables(grouped_data):
         'Core Metrics': core_metrics
     }
 
-    reward_cost_metrics = [
-        'mean_total_reward', 'mean_basic_reward', 'mean_added_reward',
-        'mean_total_cost', 'mean_total_expected_cost', 'cost_rate',
-    ]
-    if has_courtesy_gap_violation:
-        reward_cost_metrics.append('mean_courtesy_gap_violation')
-
     details_metric_categories = {
-        'Violation Rates': [
-            'speed_violation_rate', 'tailgating_violation_rate',
-            'braking_violation_rate', 'lane_keeping_violation_rate',
-            'lane_change_tailgating_violation_rate', 'lane_change_braking_violation_rate',
-            'collision_violation_rate', 'lane_change_collision_violation_rate'
-        ],
-        'Reward & Cost Metrics': reward_cost_metrics,
         'Supervisor Statistics': [
             'mean_iterations_to_converge', 'convergence_rate',
-            'outcome_unchanged_count', 'outcome_naively_augmented_count',
-            'outcome_scps_augmented_count', 'outcome_projection_count'
+            'outcome_unchanged_fraction', 'outcome_naively_augmented_fraction',
+            'outcome_scps_augmented_fraction', 'outcome_projection_fraction'
         ]
     }
     
@@ -597,29 +606,19 @@ def generate_markdown_tables(grouped_data):
         'mean_total_cost'            : 'Total Norm Cost',
         'mean_total_expected_cost'   : 'Expected Norm Cost',
         'mean_normalized_lane_index' : 'Normalised Lane Index',
-        'mean_courtesy_gap_violation': 'Mean Courtesy Gap Violation',
+        'mean_courtesy_gap_violation': 'Mean Courtesy Gap Violation (full ep.)',
         'avoided_cost_rate'      : 'Avoided Cost Rate',
         'mean_total_reward'      : 'Total Reward',
         'mean_basic_reward'      : 'Basic Reward',
         'mean_added_reward'      : 'Added Reward',
         
-        # Details metrics
-        'speed_violation_rate'                 : 'Speed Violations (hr^-1)',
-        'tailgating_violation_rate'            : 'Tailgating Violations (hr^-1)',
-        'braking_violation_rate'               : 'Braking Violations (hr^-1)',
-        'lane_keeping_violation_rate'          : 'LaneKeeping Violations (hr^-1)',
-        'lane_change_tailgating_violation_rate': 'Lane Change Tailgating Violations (hr^-1)',
-        'lane_change_braking_violation_rate'   : 'Lane Change Braking Violations (hr^-1)',
-        'collision_violation_rate'             : 'Collision Violations (hr^-1)',
-        'lane_change_collision_violation_rate' : 'Lane Change Collision Violations (hr^-1)',
-        
-        # Supervisor statistics
-        'mean_iterations_to_converge'          : 'Mean Iterations to Converge',
-        'convergence_rate'                     : 'Convergence Rate',
-        'outcome_unchanged_count'              : 'Unchanged Count',
-        'outcome_naively_augmented_count'      : 'Naively Augmented Count',
-        'outcome_scps_augmented_count'         : 'SCPS Augmented Count',
-        'outcome_projection_count'             : 'Projection Count',
+        # Supervisor statistics (details.md)
+        'mean_iterations_to_converge'             : 'Mean Iterations to Converge',
+        'convergence_rate'                        : 'Convergence Rate',
+        'outcome_unchanged_fraction'              : 'Unchanged Fraction',
+        'outcome_naively_augmented_fraction'      : 'Naively Augmented Fraction',
+        'outcome_scps_augmented_fraction'         : 'SCPS Augmented Fraction',
+        'outcome_projection_fraction'             : 'Projection Fraction',
     }
     # Build header rows
     summary_header_cols = ['Method']
@@ -799,136 +798,255 @@ def write_table_section(f, title, header_cols, rows):
         f.write("| " + " | ".join(str(cell) for cell in row) + " |\n")
 
 
-def generate_adaptive_trend_plot(grouped_data, output_dir, adaptive_values, title, projection_point):
-    """Generate line plots showing how metrics evolve with adaptive method values."""
-    # Create plots subdirectory
+def _episode_count(group_data) -> int:
+    """Total number of episodes across all experiments in ``group_data``."""
+    total = 0
+    for df in group_data:
+        if 'num_episodes' in df.columns:
+            total += int(df['num_episodes'].sum())
+    return total
+
+
+def _ci95_halfwidth(std_val, n: int) -> float:
+    """Half-width of a normal-approx 95% CI: ``1.96 * std / sqrt(n)``."""
+    if n <= 1 or pd.isna(std_val):
+        return 0.0
+    return float(1.96 * float(std_val) / np.sqrt(n))
+
+
+def generate_adaptive_trend_plot(
+    grouped_data,
+    output_dir,
+    adaptive_values,
+    title=None,
+):
+    """Generate KL-budget sweep: original reward (top) and norm cost (bottom).
+
+    Prefer filtered adaptive runs when both filtered and unfiltered exist for
+    the same ``\\delta`` value. Error bands are normal-approx 95% CIs
+    (``1.96 * std / sqrt(n_episodes)``). Filtered cost-optimal projection
+    means are drawn as horizontal dashed target lines when available.
+    """
+    del title  # retained for call-site compatibility; adaptive plots are untitled
     plots_dir = os.path.join(output_dir, 'plots')
     os.makedirs(plots_dir, exist_ok=True)
-    
-    # Group data by model-environment-profile combination
+
+    # Group adaptive sweeps by model-env-profile-value, preferring filtered
+    # over unfiltered. Also retain reference baselines:
+    # - filtered projection (cost-optimal target)
+    # - nop unfiltered (unshaped base policy)
     model_env_profile_groups = defaultdict(lambda: defaultdict(dict))
+    filtered_projection_groups = defaultdict(dict)
+    nop_unfiltered_groups = defaultdict(dict)
     for config_tuple, group_data in grouped_data.items():
         config_dict = dict(config_tuple)
-        # Only consider adaptive configurations; ignore any historical filtered/unfiltered status.
-        if config_dict['method'] != 'adaptive':
-            continue
-        
         model_env_key = (config_dict['model'], config_dict['env'])
         profile = config_dict['profile']
-        value = config_dict.get('value')
-        
-        if value is not None and value in adaptive_values:
-            model_env_profile_groups[model_env_key][profile][value] = group_data
-    
-    # Generate plots for each model-environment combination
-    for (model, env), profile_configs in sorted(model_env_profile_groups.items()):
-        if 'cautious' not in profile_configs:
+
+        if (
+            config_dict['method'] == 'projection'
+            and config_dict.get('filter') == 'filtered'
+        ):
+            filtered_projection_groups[model_env_key][profile] = group_data
             continue
-        
-        # Create subplots with shared x-axis to fit in a single column
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(3.25, 3.5), sharex=True)
 
-        SUPTITLE_FONTSIZE = 10
-        LABEL_FONTSIZE = 9      
-        LEGEND_FONTSIZE = 8
-        TICK_FONTSIZE = 8
-        MARKER_SIZE = 2.5
-        ERRORBAR_LINEWIDTH = 1.2
-        
-        # Only plot cautious profile
-        profile = 'cautious'
-        profile_configs = profile_configs[profile]
-        
-        # Plot data for cautious profile
-        x_collision = []
-        y_collision_values = []
-        y_collision_errors = []
-        x_cost = []
-        y_cost_values = []
-        y_cost_errors = []
-        
-        # Collect data points for adaptive values
-        for value in sorted(adaptive_values):
-            if value in profile_configs:
-                group_data = profile_configs[value]
-                stats, n_experiments = calculate_statistics(group_data)
-                
-                # Get collision rate per hour
-                collision_rate_str = format_collision_rate(group_data)
-                if collision_rate_str != "0.00":
-                    try:
-                        # Parse collision rate from format "X.XX ± Y.YY" or "X.XX"
-                        if "±" in collision_rate_str:
-                            parts = collision_rate_str.split("±")
-                            collision_rate = float(parts[0].strip())
-                            collision_error = float(parts[1].strip())
-                        else:
-                            collision_rate = float(collision_rate_str)
-                            collision_error = 0  # No error info available
-                        x_collision.append(value)
-                        y_collision_values.append(collision_rate)
-                        y_collision_errors.append(collision_error)
-                    except ValueError:
-                        pass
-                # Get cost rate (raw, before 3600 multiplication)
-                if 'cost_rate' in stats:
-                    mean_val, std_val = stats['cost_rate']
-                    if not pd.isna(mean_val):
-                        # Convert to per-hour units
-                        cost_rate = mean_val * 3600
-                        # Compute standard error: std / sqrt(n), then convert to per-hour
-                        se_val = std_val / np.sqrt(n_experiments) if n_experiments > 1 else 0
-                        se_val *= 3600  # Convert error to per-hour units
-                        x_cost.append(value)
-                        y_cost_values.append(cost_rate)
-                        y_cost_errors.append(se_val)
-        
-        # Only plot if we have data
-        if x_collision and y_collision_values:
-            ax1.errorbar(x_collision, y_collision_values, yerr=y_collision_errors, 
-                       marker='s', color='black', linestyle=':',
-                       capsize=3, capthick=1, linewidth=ERRORBAR_LINEWIDTH, markersize=MARKER_SIZE)
-        
-        if x_cost and y_cost_values:
-            ax2.errorbar(x_cost, y_cost_values, yerr=y_cost_errors, 
-                       marker='s', color='black', linestyle=':',
-                       capsize=3, capthick=1, linewidth=ERRORBAR_LINEWIDTH, markersize=MARKER_SIZE)
-        
-        # Use log scale for x-axis if values span multiple orders of magnitude
-        if max(adaptive_values) / min(adaptive_values) > 10:
-            ax1.set_xscale('log')
-            ax2.set_xscale('log')
-        
-        # Add grid
-        ax1.grid(True, alpha=0.3)
-        ax2.grid(True, alpha=0.3)
+        if (
+            config_dict['method'] == 'nop'
+            and config_dict.get('filter') == 'unfiltered'
+        ):
+            nop_unfiltered_groups[model_env_key][profile] = group_data
+            continue
 
-        # Add vertical dashed line at projection point
-        for ax in [ax1, ax2]:
-            ax.axvline(x=projection_point, color='gray', linestyle='--', linewidth=1.2, alpha=0.6)
+        if config_dict['method'] != 'adaptive':
+            continue
 
-        ax1.set_ylabel(r"Collision Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
-        ax2.set_ylabel(r"Cost Rate $\left(\mathrm{hr}^{-1}\right)$", fontsize=LABEL_FONTSIZE)
-        ax2.set_xlabel(r"KL Budget $\left(\bar\delta\right)$", fontsize=LABEL_FONTSIZE)
-        fig.suptitle(title, fontsize=SUPTITLE_FONTSIZE, y=0.96)
-        for ax in [ax1, ax2]:
-            ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
+        value = config_dict.get('value')
+        if value is None or value not in adaptive_values:
+            continue
 
-        plt.tight_layout()
-        fig.align_ylabels([ax1, ax2])
-        for ax in [ax1, ax2]:
-            xmin, xmax = ax.get_xlim()
-            ax.axvspan(projection_point, xmax, color='gray', alpha=0.2, label='Cost-Optimal\nProjection')
-            ax.set_xlim(xmin, xmax)
+        is_filtered = config_dict.get('filter') == 'filtered'
+        existing = model_env_profile_groups[model_env_key][profile].get(value)
+        if existing is None:
+            model_env_profile_groups[model_env_key][profile][value] = {
+                'group_data': group_data,
+                'filtered': is_filtered,
+            }
+        elif is_filtered and not existing['filtered']:
+            model_env_profile_groups[model_env_key][profile][value] = {
+                'group_data': group_data,
+                'filtered': True,
+            }
 
-        # Add a shared legend across the top, under the title
-        ax1.legend(loc='upper right', fontsize=LEGEND_FONTSIZE)
-    
-        plot_file = os.path.join(plots_dir, f'adaptive_trends_{model}_{env}.pdf')
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"Adaptive trends plot saved to: {plot_file}")
+    for (model, env), profile_map in sorted(model_env_profile_groups.items()):
+        for profile, value_map in sorted(profile_map.items()):
+            if not value_map:
+                continue
 
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(3.25, 3.6), sharex=True)
+
+            LABEL_FONTSIZE = 9
+            LEGEND_FONTSIZE = 8
+            TICK_FONTSIZE = 8
+            MARKER_SIZE = 4.0
+            ERRORBAR_LINEWIDTH = 1.2
+
+            x_vals = []
+            y_reward = []
+            y_reward_err = []
+            y_cost = []
+            y_cost_err = []
+
+            for value in sorted(adaptive_values):
+                if value not in value_map:
+                    continue
+                group_data = value_map[value]['group_data']
+                stats, _n_experiments = calculate_statistics(group_data)
+
+                if 'mean_basic_reward' not in stats or 'mean_total_cost' not in stats:
+                    continue
+                reward_mean, reward_std = stats['mean_basic_reward']
+                cost_mean, cost_std = stats['mean_total_cost']
+                if pd.isna(reward_mean) or pd.isna(cost_mean):
+                    continue
+
+                n_eps = _episode_count(group_data)
+                x_vals.append(value)
+                y_reward.append(float(reward_mean))
+                y_reward_err.append(_ci95_halfwidth(reward_std, n_eps))
+                y_cost.append(float(cost_mean))
+                y_cost_err.append(_ci95_halfwidth(cost_std, n_eps))
+
+            if not x_vals:
+                plt.close(fig)
+                continue
+
+            x_arr = np.asarray(x_vals, dtype=float)
+            reward_arr = np.asarray(y_reward, dtype=float)
+            reward_err_arr = np.asarray(y_reward_err, dtype=float)
+            cost_arr = np.asarray(y_cost, dtype=float)
+            cost_err_arr = np.asarray(y_cost_err, dtype=float)
+
+            LINE_COLOR = '#1F4E79'
+            PROJECTION_COLOR = '#666666'
+            NOP_COLOR = '#666666'
+
+            ax1.fill_between(
+                x_arr, reward_arr - reward_err_arr, reward_arr + reward_err_arr,
+                color=LINE_COLOR, alpha=0.2, linewidth=0,
+            )
+            ax1.plot(
+                x_arr, reward_arr,
+                marker='o', color=LINE_COLOR, linestyle='-',
+                linewidth=ERRORBAR_LINEWIDTH, markersize=MARKER_SIZE,
+            )
+            ax2.fill_between(
+                x_arr, cost_arr - cost_err_arr, cost_arr + cost_err_arr,
+                color=LINE_COLOR, alpha=0.2, linewidth=0,
+            )
+            ax2.plot(
+                x_arr, cost_arr,
+                marker='o', color=LINE_COLOR, linestyle='-',
+                linewidth=ERRORBAR_LINEWIDTH, markersize=MARKER_SIZE,
+                label='Adaptive-$\\beta$\nSCPS',
+            )
+
+            def _draw_reference_lines(group_data, color, linestyle, label):
+                """Draw reward/cost horizontal references; label only on bottom axis."""
+                target_stats, _ = calculate_statistics(group_data)
+                target_reward = target_stats.get('mean_basic_reward', (np.nan, np.nan))[0]
+                target_cost = target_stats.get('mean_total_cost', (np.nan, np.nan))[0]
+                if pd.isna(target_reward) or pd.isna(target_cost):
+                    return None
+                ax1.axhline(
+                    y=float(target_reward),
+                    color=color,
+                    linestyle=linestyle,
+                    linewidth=1.5,
+                )
+                ax2.axhline(
+                    y=float(target_cost),
+                    color=color,
+                    linestyle=linestyle,
+                    linewidth=1.5,
+                    label=label,
+                )
+                return float(target_reward), float(target_cost)
+
+            has_reference_lines = False
+            nop_target = nop_unfiltered_groups.get((model, env), {}).get(profile)
+            if nop_target is not None:
+                targets = _draw_reference_lines(
+                    nop_target,
+                    NOP_COLOR,
+                    '--',
+                    'RL Prior',
+                )
+                if targets is not None:
+                    has_reference_lines = True
+                    print(
+                        f"NOP unfiltered targets for {env}/{profile}: "
+                        f"reward={targets[0]:.3f}, cost={targets[1]:.3f}"
+                    )
+
+            projection_target = filtered_projection_groups.get((model, env), {}).get(profile)
+            if projection_target is not None:
+                targets = _draw_reference_lines(
+                    projection_target,
+                    PROJECTION_COLOR,
+                    '-.',
+                    'Cost-optimal\nProjection',
+                )
+                if targets is not None:
+                    has_reference_lines = True
+                    print(
+                        f"Filtered projection targets for {env}/{profile}: "
+                        f"reward={targets[0]:.3f}, cost={targets[1]:.3f}"
+                    )
+
+            if max(adaptive_values) / min(adaptive_values) > 10:
+                ax1.set_xscale('log')
+                ax2.set_xscale('log')
+
+            ax1.grid(True, alpha=0.3)
+            ax2.grid(True, alpha=0.3)
+
+            ax1.set_ylabel(r"Original Reward", fontsize=LABEL_FONTSIZE)
+            ax2.set_ylabel(r"Norm-violation Cost", fontsize=LABEL_FONTSIZE)
+            ax2.set_xlabel(r"KL Budget $\left(\delta\right)$", fontsize=LABEL_FONTSIZE)
+            for ax in (ax1, ax2):
+                ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
+                ax.yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%.1f'))
+
+            plt.tight_layout()
+            fig.align_ylabels([ax1, ax2])
+            if has_reference_lines:
+                handles, labels = ax2.get_legend_handles_labels()
+                legend_order = {
+                    'RL Prior': 0,
+                    'Adaptive-$\\beta$\nSCPS': 1,
+                    'Cost-optimal\nProjection': 2,
+                }
+                handles, labels = zip(*sorted(
+                    zip(handles, labels),
+                    key=lambda item: legend_order[item[1]],
+                ))
+                ax2.legend(
+                    handles,
+                    labels,
+                    loc='center right',
+                    fontsize=LEGEND_FONTSIZE,
+                )
+
+            profile_slug = str(profile).replace(' ', '_')
+            plot_file = os.path.join(
+                plots_dir, f'adaptive_trends_{model}_{env}_{profile_slug}.pdf'
+            )
+            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+            png_file = plot_file.replace('.pdf', '.png')
+            plt.savefig(png_file, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"Adaptive trends plot saved to: {plot_file}")
+            print(f"Adaptive trends preview saved to: {png_file}")
 
 def generate_clustered_bar_plot(
     grouped_data,
@@ -1012,8 +1130,8 @@ def generate_clustered_bar_plot(
             elif cfg.get("profile") == "efficient":
                 groups_by_model_env[key]["efficient_adaptive"].extend(group_data)
 
-    # Helper to compute mean & SE for a single column across a list of dfs
-    def _mean_se(dfs, col):
+    # Helper to compute mean & sample std for a single column across a list of dfs
+    def _mean_std(dfs, col):
         import numpy as np
         import pandas as pd
 
@@ -1028,9 +1146,9 @@ def generate_clustered_bar_plot(
         series = pd.concat(vals).dropna()
         if series.empty:
             return np.nan, 0.0
-        mean = series.mean() 
-        se = (series.std() / np.sqrt(len(series))) if len(series) > 1 else 0.0
-        return mean, se
+        mean = series.mean()
+        std = float(series.std(ddof=1)) if len(series) > 1 else 0.0
+        return mean, std
 
     # Iterate through model–env combos and draw plots
     ACTION_PREFIX = prefix
@@ -1068,14 +1186,14 @@ def generate_clustered_bar_plot(
         else:
             categories = sorted(raw_categories)
 
-        # Collect statistics
+        # Collect statistics (mean ± sample std over episodes)
         stats = {key: {"means": [], "ses": []} for key in data_dict.keys()}
         for cat in categories:
             col_name = f"{ACTION_PREFIX}{cat}{ACTION_SUFFIX}"
             for key in stats.keys():
-                mean, se = _mean_se(data_dict[key], col_name)
+                mean, std = _mean_std(data_dict[key], col_name)
                 stats[key]["means"].append(mean)
-                stats[key]["ses"].append(se)
+                stats[key]["ses"].append(std)
 
         # Plot
         import numpy as np
@@ -1319,7 +1437,7 @@ def main():
     )
     parser.add_argument('--plots', action='store_true',
                        help='Generate visualization plots (default: False)')
-    parser.add_argument('--plot-adaptive-values', default='0.01, 0.0316, 0.10, 0.3162, 1.00, 3.1623, 10.000',
+    parser.add_argument('--plot-adaptive-values', default='0.005,0.01,0.02,0.025,0.03,0.0316,0.05,0.3162,1.00,3.1623,10.000',
                        help='Comma-separated list of adaptive values to include in trend plots')
     
     
@@ -1380,13 +1498,12 @@ def main():
     
     # Generate plots only if --plots flag is set
     if args.plots:
-        # LaTeX text rendering for publication plots. Requires a local TeX install.
+        # Publication plots historically used LaTeX; fall back to mathtext when
+        # the local TeX install is incomplete (common on WSL / Colab images).
         plt.rcParams.update({
-            "text.usetex": True,
-            "pgf.texsystem": "pdflatex",
-            "pgf.rcfonts": False,
+            "text.usetex": False,
+            "mathtext.fontset": "cm",
             "font.family": "serif",
-            "text.latex.preamble": r"\usepackage{times}",
         })
         # Generate adaptive trends plot
         if plot_adaptive_values:
@@ -1395,9 +1512,7 @@ def main():
                 grouped_data=grouped_data,
                 output_dir=args.output_dir,
                 adaptive_values=plot_adaptive_values,
-                title=r"""Effect of KL Budget in Adaptive-$\beta$ SCPS
-                for the Complex Zero-Shot Environment""",
-            projection_point=3.1623)
+            )
         
         # Generate clustered-bar plots for unsafe TTC and unsafe distance
         print("Generating unsafe TTC bar plot...")
@@ -1559,12 +1674,14 @@ def main():
 
         with open(details_file, 'a') as f:
             f.write(f"\n## {model} {env} Detailed Metrics\n\n")
-            f.write("For each metric, the mean and standard error between experiments are given in "
-                    "the format \"mean ± SE\". \n\n")
-            f.write("**Supervisor Statistics:**\n")
-            f.write("- Mean Iterations to Converge: Average number of iterations for the root-finding algorithm to converge\n")
-            f.write("- Convergence Rate: Fraction of root-finding attempts that successfully converged\n")
-            f.write("- Outcome Counts: Number of times each policy augmentation outcome occurred\n\n")
+            f.write("For each metric, cells are **mean ± sample standard deviation** "
+                    "over episodes (`ddof=1`), in the format \"mean ± std\".\n\n")
+            f.write("- **Mean Iterations to Converge**: Average number of iterations for "
+                    "the root-finding algorithm to converge\n")
+            f.write("- **Convergence Rate**: Fraction of root-finding attempts that "
+                    "successfully converged\n")
+            f.write("- **Outcome Fractions**: Fraction of decision steps with each "
+                    "policy augmentation outcome\n\n")
             write_table_section(f, "Main Experimental Results", header_cols, main_rows)
     
     print(f"Analysis complete! Results written to:")

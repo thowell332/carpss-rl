@@ -277,6 +277,57 @@ class MergeEnvMEAddCourtesyReward(MergeEnvMEBasic):
         return float(self.added_reward)
 
 
+class MergeEnvMEAddCourtesyRewardALL(MergeEnvMEBasic):
+    """From-scratch full-reward env: basic + courtesy add-on.
+
+    Mirrors ``HighwayEnvMEAddRightRewardALL``: returned reward is
+    ``MergeEnvMEBasic`` terms plus ``courtesy_add_on_reward``, with
+    ``basic_reward`` / ``added_reward`` exposed for logging.
+    """
+
+    @classmethod
+    def default_config(cls) -> dict:
+        cfg = super().default_config()
+        cfg.update({
+            # Envelope length [m] (matches MergeCourtesyNormProfile.COURTESY_DISTANCE).
+            "courtesy_distance": 90.0,
+            "courtesy_target_lane_id": 1,
+        })
+        return cfg
+
+    def _reward(self, action: int) -> float:
+        del action
+        from highway_env.envs.merge_courtesy import courtesy_add_on_reward
+
+        neighbours = self.road.network.all_side_lanes(self.vehicle.lane_index)
+        lane = self.vehicle.target_lane_index[2] if isinstance(self.vehicle, ControlledVehicle) \
+            else self.vehicle.lane_index[2]
+        lane_fraction = lane / max(len(neighbours) - 1, 1)
+
+        forward_speed = self.vehicle.speed * np.cos(self.vehicle.heading)
+        scaled_speed = utils.lmap(forward_speed, self.config["reward_speed_range"], [0, 1])
+        basic = (
+            self.config["collision_reward"] * self.vehicle.crashed
+            + self.config["right_lane_reward"] * lane_fraction
+            + self.config["high_speed_reward"] * np.clip(scaled_speed, 0, 1)
+            + 1
+        )
+        basic = 0.0 if not self.vehicle.on_road else float(basic)
+
+        added = float(
+            courtesy_add_on_reward(
+                self.vehicle,
+                courtesy_distance=float(self.config["courtesy_distance"]),
+                target_lane_id=int(self.config["courtesy_target_lane_id"]),
+            )
+        )
+        added = 0.0 if not self.vehicle.on_road else added
+
+        self.basic_reward = basic
+        self.added_reward = added
+        return basic + added
+
+
 def _register(id: str, entry_point: str, **kwargs) -> None:
     """Register with gymnasium (preferred) and gym when available."""
     for register_fn in (register_gymnasium, register_gym):
@@ -302,4 +353,9 @@ _register(
 _register(
     id='merge-ME-basic-AddCourtesyReward-v0',
     entry_point='highway_env.envs:MergeEnvMEAddCourtesyReward',
+)
+
+_register(
+    id='merge-ME-basic-AddCourtesyRewardALL-v0',
+    entry_point='highway_env.envs:MergeEnvMEAddCourtesyRewardALL',
 )

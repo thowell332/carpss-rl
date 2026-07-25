@@ -10,7 +10,7 @@ else
 fi
 
 # Set to true to overwrite existing results
-FORCE_WRITE=true
+FORCE_WRITE=false
 
 experiments=(
     # BASELINES
@@ -22,24 +22,13 @@ experiments=(
 
     # ADAPTIVE
     # <profile>   <method>    <value>  <filter>
-    #" right_lane  adaptive       0.01  False "
     " right_lane  adaptive       0.05  False "
-    #" right_lane  adaptive       0.10  False "
-    #" right_lane  adaptive       0.01  True  "
     " right_lane  adaptive       0.05  True  "
-    #" right_lane  adaptive       0.10  True  "
 
     # FIXED
     # <profile>   <method>    <value>  <filter>
-    #" right_lane  fixed          0.01  False "
-    #" right_lane  fixed          0.05  False "
-    #" right_lane  fixed          0.10  False "
-    " right_lane  fixed          1.00  False "
-    #" right_lane  fixed          0.01  True  "
-    #" right_lane  fixed          0.05  True  "
-    #" right_lane  fixed          0.10  True  "
-    #" right_lane  fixed          0.50  True  "
-    " right_lane  fixed          1.00  True  "
+    " right_lane  fixed          0.75  False  "
+    " right_lane  fixed          0.75  True  "
 
     # PROJECTION
     # <profile>   <method>    <value>  <filter>
@@ -48,19 +37,31 @@ experiments=(
 
     # LOG SPACED TRIALS
     # <profile>   <method>    <value>  <filter>
+    " right_lane  adaptive     0.00001  True  "
+    " right_lane  adaptive     0.0000316  True  "
+    " right_lane  adaptive     0.0001  True  "
+    " right_lane  adaptive     0.000316  True  "
+    " right_lane  adaptive     0.0010  True  "
+    " right_lane  adaptive     0.0032  True  "
+    " right_lane  adaptive     0.0100  True  "
     " right_lane  adaptive     0.0316  True  "
+    " right_lane  adaptive     0.1000  True  "
     " right_lane  adaptive     0.3162  True  "
+    " right_lane  adaptive     1.0000  True  "
     " right_lane  adaptive     3.1623  True  "
     " right_lane  adaptive     10.000  True  "
+    " right_lane  adaptive     31.623  True  "
+    " right_lane  adaptive     100.00  True  "
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+RESULTS_ROOT="$PROJECT_ROOT/results/highway"
 
 for ENV in "${ENVIRONMENTS[@]}"; do
 
     # Create results directory for this environment if it doesn't exist
-    mkdir -p "$PROJECT_ROOT/results/$ENV"
+    mkdir -p "$RESULTS_ROOT/$ENV"
     
     for args in "${experiments[@]}"; do
         # Each experiment line: <profile> <method> <value> <filter>
@@ -76,14 +77,14 @@ for ENV in "${ENVIRONMENTS[@]}"; do
         fi
 
         # Create subdirectory with profile prefix
-        mkdir -p "$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}"
+        mkdir -p "$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}"
         
         # Build output filename
         file_prefix="3L30V_${ENV}"
         if [ "$method" == "adaptive" ] || [ "$method" == "fixed" ]; then
-            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
+            out_path="$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}/${file_prefix}_${value}.csv"
         else
-            out_path="$PROJECT_ROOT/results/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
+            out_path="$RESULTS_ROOT/${ENV}/${profile}/${sub_dir}/${file_prefix}.csv"
         fi
 
         if [ "$FORCE_WRITE" = true ] && [ -f "$out_path" ]; then
